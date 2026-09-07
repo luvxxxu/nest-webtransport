@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebTransport Demo</title>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>WebTransport Demo</h1>
+
+      <table>
+        <tbody>
+          <tr>
+            <th scope="row">Browser</th>
+            <td id="support-status">확인 중</td>
+          </tr>
+          <tr>
+            <th scope="row">Connection</th>
+            <td id="connection-status">연결 안 됨</td>
+          </tr>
+          <tr>
+            <th scope="row">Session</th>
+            <td id="session-id">—</td>
+          </tr>
+          <tr>
+            <th scope="row">RTT</th>
+            <td id="round-trip">—</td>
+          </tr>
+          <tr>
+            <th scope="row">Received / sent</th>
+            <td><span id="received-count">0</span> / <span id="sent-count">0</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <fieldset>
+        <legend>Connection</legend>
+        <p>
+          <label>
+            URL
+            <input id="server-url" type="url" size="48" spellcheck="false" autocomplete="off" />
+          </label>
+        </p>
+        <p>
+          <label>
+            Token
+            <input
+              id="auth-token"
+              type="password"
+              size="48"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="WEBTRANSPORT_AUTH_TOKEN"
+            />
+          </label>
+        </p>
+        <p>
+          <label>
+            Certificate SHA-256
+            <input
+              id="certificate-hash"
+              type="text"
+              size="68"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </label>
+        </p>
+        <button id="connect-button" type="button">Connect</button>
+        <button id="disconnect-button" type="button" disabled>Disconnect</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Datagram echo</legend>
+        <input id="datagram-message" type="text" size="48" value="hello datagram" maxlength="400" />
+        <button id="datagram-button" type="button" disabled>Send</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Datagram broadcast</legend>
+        <input id="broadcast-message" type="text" size="48" value="hello everyone" maxlength="400" />
+        <button id="broadcast-button" type="button" disabled>Broadcast</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Bidirectional stream</legend>
+        <input
+          id="bidi-message"
+          type="text"
+          size="48"
+          value="hello bidirectional stream"
+          maxlength="4000"
+        />
+        <button id="bidi-button" type="button" disabled>Send</button>
+        <output id="bidi-result">—</output>
+      </fieldset>
+
+      <fieldset>
+        <legend>Unidirectional stream</legend>
+        <input
+          id="uni-message"
+          type="text"
+          size="48"
+          value="hello unidirectional stream"
+          maxlength="4000"
+        />
+        <button id="uni-button" type="button" disabled>Send</button>
+        <output id="uni-result">—</output>
+      </fieldset>
+
+      <h2>Events</h2>
+      <button id="clear-log-button" type="button">Clear</button>
+      <table border="1" cellpadding="6" cellspacing="0">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Direction</th>
+            <th>Channel</th>
+            <th>Event</th>
+            <th>Bytes</th>
+            <th>Message</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="event-log"></tbody>
+      </table>
+    </main>
+  </body>
+</html>
