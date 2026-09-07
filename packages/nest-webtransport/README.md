@@ -1,4 +1,31 @@
 # nest-webtransport
 
-NestJS module, decorators, gateway discovery, and handler routing built on
-`webtransport-core`.
+NestJS 12 integration for WebTransport: gateways, session/datagram/stream decorators, admission,
+bounded scheduling, Nest guards/pipes/interceptors/filters and graceful shutdown.
+
+```sh
+npm install nest-webtransport webtransport-driver-rwebtransport @nestjs/common @nestjs/core reflect-metadata rxjs
+```
+
+Requires ESM and Node.js 24.x or 26.x. Register decorated gateway classes as Nest providers and
+configure `WebTransportModule.forRoot({driver, server, security})` or `forRootAsync(...)`.
+Set an explicit Origin allowlist in both the module and native driver. Dynamic authentication runs
+immediately after the established session is surfaced, not before HTTP/3 CONNECT acceptance.
+
+`@OnSession()` initializes a session. `@OnDatagram()` receives a `Uint8Array` through `@Payload()`;
+`@OnBidirectionalStream()` and `@OnUnidirectionalStream()` receive their stream through `@Stream()`.
+Use `@Session()` for the connection and `@WebTransportContext()` for its principal, metadata and
+abort signal. Propagate that signal to cancellable I/O. Named handlers need a routing resolver;
+raw handlers require no envelope or codec.
+
+For kinds with decorator handlers, the framework owns the incoming collection reader. The handler
+owns the delivered stream's body. Do not acquire another reader on a framework-owned collection.
+
+Full examples and API guidance:
+
+- [Gateway setup](https://github.com/luvxxxu/nest-webtransport#gateway-example)
+- [Architecture and ownership](https://github.com/luvxxxu/nest-webtransport/blob/main/docs/architecture.md)
+- [Security model](https://github.com/luvxxxu/nest-webtransport/blob/main/docs/security.md)
+- [Virtual testing](https://github.com/luvxxxu/nest-webtransport/blob/main/docs/testing.md)
+
+MIT license.

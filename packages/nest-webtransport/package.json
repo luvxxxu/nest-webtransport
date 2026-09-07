@@ -1,6 +1,6 @@
 {
   "name": "nest-webtransport",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "NestJS integration for WebTransport",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,16 +14,20 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.spec.ts",
+    "!src/**/*.test.ts",
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=20.11"
+    "node": ">=24 <25 || >=26 <27"
   },
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. packages/nest-webtransport/src",
     "publint": "publint",
     "prepack": "bun run build"
   },
@@ -38,5 +42,15 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luvxxxu/nest-webtransport.git",
+    "directory": "packages/nest-webtransport"
+  },
+  "homepage": "https://github.com/luvxxxu/nest-webtransport#readme",
+  "bugs": {
+    "url": "https://github.com/luvxxxu/nest-webtransport/issues"
   }
 }
