@@ -35,7 +35,6 @@
         "nest-webtransport": "workspace:*",
         "reflect-metadata": "^0.2.2",
         "rxjs": "^7.8.2",
-        "webtransport-driver-rwebtransport": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^26.4.1",
@@ -54,7 +53,6 @@
         "redis": "^5.0.0",
         "reflect-metadata": "^0.2.2",
         "rxjs": "^7.8.2",
-        "webtransport-driver-rwebtransport": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^24.13.3",
@@ -70,7 +68,6 @@
         "nest-webtransport": "workspace:*",
         "reflect-metadata": "^0.2.2",
         "rxjs": "^7.8.2",
-        "webtransport-driver-rwebtransport": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^26.4.1",
@@ -94,6 +91,7 @@
       "version": "0.1.0",
       "dependencies": {
         "webtransport-core": "workspace:*",
+        "webtransport-driver-rwebtransport": "workspace:*",
       },
       "peerDependencies": {
         "@nestjs/common": "^12.0.0",

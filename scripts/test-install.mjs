@@ -56,9 +56,8 @@ try {
     import assert from 'node:assert/strict';
     import { NestFactory } from '@nestjs/core';
     import { Module } from '@nestjs/common';
-    import { WebTransportModule, WebTransportHealthService } from 'nest-webtransport';
+    import { RWebTransportDriver, WebTransportModule, WebTransportHealthService } from 'nest-webtransport';
     import { VirtualWebTransportDriver } from 'nest-webtransport-testing';
-    import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
     import { WebTransportOtelModule } from 'nest-webtransport-otel';
     const driver = new VirtualWebTransportDriver();
     class App {}
@@ -74,8 +73,7 @@ try {
   await writeFile(
     join(temporary, 'probe.ts'),
     `
-    import { WebTransportModule, type WebTransportSession } from 'nest-webtransport';
-    import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
+    import { RWebTransportDriver, WebTransportModule, type WebTransportSession } from 'nest-webtransport';
     import { VirtualWebTransportDriver, TestClient } from 'nest-webtransport-testing';
     import { WebTransportOtelModule } from 'nest-webtransport-otel';
     import { BoundedQueue } from 'webtransport-core';

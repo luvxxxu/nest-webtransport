@@ -14,7 +14,7 @@ See [release verification](docs/releasing.md) for the required checks and their 
 | Package | Responsibility |
 | --- | --- |
 | `webtransport-core` | Runtime-neutral driver, session, stream, datagram, lifecycle, limit, and error contracts |
-| `nest-webtransport` | Dynamic module, gateway discovery, routing, Nest execution pipeline, limits, shutdown, and health |
+| `nest-webtransport` | Dynamic module, gateway discovery, routing, Nest execution pipeline, limits, shutdown, health, and the native driver |
 | `webtransport-driver-rwebtransport` | Node.js adapter for `rwebtransport` 0.2.2 and native HTTP/3/QUIC |
 | `nest-webtransport-testing` | Deterministic virtual driver, paired sessions and streams, and an in-memory test client |
 | `nest-webtransport-otel` | Optional OpenTelemetry driver metrics, handler metrics, and tracing |
@@ -24,17 +24,18 @@ The dependency direction is fixed:
 ```text
 Nest application
   -> nest-webtransport
-    -> webtransport-core <- concrete driver
-                                   -> rwebtransport -> HTTP/3 -> QUIC -> UDP
+    -> webtransport-core
+    -> webtransport-driver-rwebtransport -> rwebtransport -> HTTP/3 -> QUIC -> UDP
 
 Tests
   -> nest-webtransport-testing
     -> webtransport-core
 ```
 
-The Nest package never imports `rwebtransport`, and core imports neither NestJS nor a concrete
-driver. Public transport contracts use `Uint8Array`, `ReadableStream`, `WritableStream`, `Headers`,
-and `AbortSignal`.
+The Nest package re-exports the bundled native driver for a one-package installation, while custom
+drivers can still be injected through the same core contract. Only the native driver imports
+`rwebtransport`; core imports neither NestJS nor a concrete driver. Public transport contracts use
+`Uint8Array`, `ReadableStream`, `WritableStream`, `Headers`, and `AbortSignal`.
 
 ## Implemented runtime
 
@@ -59,7 +60,7 @@ limits for each deployment; local release tests do not replace infrastructure-sp
 ## Installation
 
 ```sh
-npm install nest-webtransport webtransport-driver-rwebtransport @nestjs/common @nestjs/core reflect-metadata rxjs
+npm install nest-webtransport @nestjs/common @nestjs/core reflect-metadata rxjs
 ```
 
 Use NestJS 12 with Node.js 24.x or 26.x. Add `nest-webtransport-testing` for virtual tests and
@@ -81,10 +82,10 @@ import {
   Stream,
   WebTransportGateway,
   WebTransportModule,
+  RWebTransportDriver,
   type WebTransportBidirectionalStream,
   type WebTransportSession,
 } from 'nest-webtransport';
-import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
 
 @WebTransportGateway('/realtime')
 class RealtimeGateway {

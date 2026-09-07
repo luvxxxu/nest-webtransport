@@ -32,7 +32,8 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "webtransport-core": "workspace:*"
+    "webtransport-core": "workspace:*",
+    "webtransport-driver-rwebtransport": "workspace:*"
   },
   "peerDependencies": {
     "@nestjs/common": "^12.0.0",

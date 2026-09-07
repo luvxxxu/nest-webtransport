@@ -12,13 +12,11 @@ Nest application
 nest-webtransport
   discovery · routing · execution · lifecycle
         │
-        ▼
-webtransport-core ◀──────── concrete driver
-                                     │
-                                     ▼
-                   webtransport-driver-rwebtransport
-                                     │
-                                     ▼
+        ├──────────────▶ webtransport-core ◀──────── custom driver contract
+        │
+        └──────────────▶ webtransport-driver-rwebtransport
+                                      │
+                                      ▼
                     rwebtransport · HTTP/3 · QUIC · UDP
 
 nest-webtransport-testing ──▶ webtransport-core
@@ -27,7 +25,8 @@ nest-webtransport-testing ──▶ webtransport-core
 The dependency rules are mechanical:
 
 1. `webtransport-core` imports neither NestJS nor `rwebtransport`.
-2. `nest-webtransport` imports core, but never a concrete driver.
+2. `nest-webtransport` imports core and re-exports the native driver as its default installation
+   path; applications may inject any driver that implements the core contract.
 3. Only `webtransport-driver-rwebtransport` imports `rwebtransport`.
 4. The testing package imports core and remains usable without NestJS or native QUIC.
 

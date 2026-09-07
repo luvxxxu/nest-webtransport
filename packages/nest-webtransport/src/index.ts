@@ -9,6 +9,11 @@ export type {
   WebTransportSession,
 } from 'webtransport-core';
 export {
+  RWEBTRANSPORT_DRIVER_CAPABILITIES,
+  RWebTransportDriver,
+  type RWebTransportDriverOptions,
+} from 'webtransport-driver-rwebtransport';
+export {
   switchToWebTransport,
   type WebTransportArgumentsHost,
   type WebTransportExecutionContext,

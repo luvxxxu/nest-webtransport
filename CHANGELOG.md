@@ -17,5 +17,7 @@ and optional OpenTelemetry integration.
   caps incoming session/stream queues before Nest consumes them.
 - Unexpected native server termination clears driver readiness.
 - Tracing subscribes within the span context and omits URL query/fragment credentials.
+- `nest-webtransport` re-exports the native driver so the standard setup needs only one framework
+  package in the application install command.
 - MIT license, source maps with corresponding sources, and isolated package installation checks.
 - Automated native, Chromium, overload, abrupt-disconnect and sustained-load release gates.

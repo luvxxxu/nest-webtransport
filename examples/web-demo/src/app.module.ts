@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
-import { WebTransportModule } from 'nest-webtransport';
-import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
+import { RWebTransportDriver, WebTransportModule } from 'nest-webtransport';
 
 import { loadWebDemoConfig } from './config.js';
 import { DemoGateway } from './demo.gateway.js';

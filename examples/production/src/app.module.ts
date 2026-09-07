@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
-import { WebTransportModule, type WebTransportRouteResolution } from 'nest-webtransport';
+import {
+  RWebTransportDriver,
+  WebTransportModule,
+  type WebTransportRouteResolution,
+} from 'nest-webtransport';
 import { WebTransportOtelModule } from 'nest-webtransport-otel';
-import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
 
 import { loadProductionConfig } from './config.js';
 import { JwtAuthenticator } from './jwt-authenticator.js';

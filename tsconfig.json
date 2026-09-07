@@ -2,8 +2,8 @@
   "files": [],
   "references": [
     { "path": "./packages/core" },
-    { "path": "./packages/nest-webtransport" },
     { "path": "./packages/driver-rwebtransport" },
+    { "path": "./packages/nest-webtransport" },
     { "path": "./packages/testing" },
     { "path": "./packages/otel" }
   ]

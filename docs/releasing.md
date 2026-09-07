@@ -47,8 +47,9 @@ workflow on each target OS/architecture before advertising it as tested.
 2. Confirm package names are owned by the intended npm account and the matching release workflow
    is green for the exact commit being published.
 3. Pack with Bun (which resolves `workspace:*`) and inspect the five tarballs.
-4. Publish those tarballs in dependency order: `webtransport-core`, `nest-webtransport`,
-   `webtransport-driver-rwebtransport`, `nest-webtransport-testing`, `nest-webtransport-otel`.
+4. Publish those tarballs in dependency order: `webtransport-core`,
+   `webtransport-driver-rwebtransport`, `nest-webtransport`, `nest-webtransport-testing`,
+   `nest-webtransport-otel`.
 5. Install the released versions in a clean application and run the smoke checks again.
 
 Use a release candidate dist-tag while verifying registry publication. Registry ownership,

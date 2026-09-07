@@ -4,8 +4,11 @@ NestJS 12 integration for WebTransport: gateways, session/datagram/stream decora
 bounded scheduling, Nest guards/pipes/interceptors/filters and graceful shutdown.
 
 ```sh
-npm install nest-webtransport webtransport-driver-rwebtransport @nestjs/common @nestjs/core reflect-metadata rxjs
+npm install nest-webtransport @nestjs/common @nestjs/core reflect-metadata rxjs
 ```
+
+`nest-webtransport` includes the native `rwebtransport` driver. Import both the Nest runtime and
+`RWebTransportDriver` from this package; the driver package is installed transitively.
 
 Requires ESM and Node.js 24.x or 26.x. Register decorated gateway classes as Nest providers and
 configure `WebTransportModule.forRoot({driver, server, security})` or `forRootAsync(...)`.

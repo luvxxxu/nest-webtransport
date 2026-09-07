@@ -28,8 +28,7 @@ not copy that portable option into an already constructed driver.
 ## Safe module configuration
 
 ```ts
-import { WebTransportModule } from 'nest-webtransport';
-import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
+import { RWebTransportDriver, WebTransportModule } from 'nest-webtransport';
 
 const webTransport = WebTransportModule.forRoot({
   // rwebtransport applies this static list before CONNECT is accepted.

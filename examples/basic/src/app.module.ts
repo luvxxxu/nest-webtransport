@@ -1,6 +1,9 @@
 import { Logger, Module } from '@nestjs/common';
-import { type WebTransportLogRecord, WebTransportModule } from 'nest-webtransport';
-import { RWebTransportDriver } from 'webtransport-driver-rwebtransport';
+import {
+  RWebTransportDriver,
+  type WebTransportLogRecord,
+  WebTransportModule,
+} from 'nest-webtransport';
 
 import { BasicGateway } from './basic.gateway.js';
 import { authorizationMatches, basicExampleConfig } from './config.js';
