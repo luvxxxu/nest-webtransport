@@ -4,6 +4,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/nest-webtransport" },
     { "path": "./packages/driver-rwebtransport" },
-    { "path": "./packages/testing" }
+    { "path": "./packages/testing" },
+    { "path": "./packages/otel" }
   ]
 }
