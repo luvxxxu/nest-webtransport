@@ -30,6 +30,15 @@ const patched = source
     unsafeCleanup,
     'void core.closed.promise.then(() => this.sessions.delete(sessionId), () => this.sessions.delete(sessionId));',
   )
+  .replace('  closedState = false;\n', '  closedState = false;\n  localCloseRequested = false;\n')
+  .replace(
+    '  close(code, reason) {\n    if (this.closedState || !this.transport) return;\n    this.transport.closeSession(code >>> 0, new TextEncoder().encode(reason));\n  }',
+    '  close(code, reason) {\n    if (this.closedState || !this.transport) return;\n    this.localCloseRequested = true;\n    this.transport.closeSession(code >>> 0, new TextEncoder().encode(reason));\n  }',
+  )
+  .replace(
+    'for (const sink of this.sends.values()) sink.onSessionClose(err);',
+    'for (const sink of this.sends.values()) sink.onSessionClose(err, error === void 0);',
+  )
   .replace(
     '  constructor(session, streamId, options = {}) {\n    let controller;\n',
     '  constructor(session, streamId, options = {}) {\n    let controller;\n    let closeRequested = false;\n',
@@ -44,11 +53,11 @@ const patched = source
   )
   .replace(
     '      onStopSending(code) {\n        try {\n          controller.error(',
-    '      onStopSending(code) {\n        if (closeRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(',
+    '      onStopSending(code) {\n        if (closeRequested || session.localCloseRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(',
   )
   .replace(
     '      onSessionClose(error) {\n        try {\n          controller.error(error);\n        } catch {\n        }\n        session.unregisterSend(streamId);\n      }\n    });\n    this.streamId = streamId;',
-    '      onSessionClose(error) {\n        if (closeRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(error);\n        } catch {\n        }\n        session.unregisterSend(streamId);\n      }\n    });\n    this.streamId = streamId;',
+    '      onSessionClose(error, clean) {\n        if (clean || closeRequested || session.localCloseRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(error);\n        } catch {\n        }\n        session.unregisterSend(streamId);\n      }\n    });\n    this.streamId = streamId;',
   )
   .replace(
     /this.incomingBidirectionalStreams = new ReadableStream\(\{[\s\S]*?\n {4}\}\);/,
@@ -91,7 +100,8 @@ const patched = source
 const output = `// Generated from rwebtransport 0.2.2, SHA-256 ${digest}.
 // Copyright 2026 Dacely Cloud. Apache-2.0; see LICENSE and NOTICE in this directory.
 // Modified by nest-webtransport contributors: handle rejected session cleanup;
-// bound incoming stream collections; resolve the dependency's binaries; preserve error identity.
+// bound incoming stream collections; resolve the dependency's binaries; preserve error identity;
+// avoid stream close/error races after a local session close.
 // Regenerate with: node scripts/vendor-rwebtransport.mjs --write
 ${patched}`;
 const target = join(driver, 'vendor/rwebtransport.mjs');

@@ -4,6 +4,8 @@ import type { WebTransportDatagramChannel as CoreDatagramChannel } from 'webtran
 import { mapRWebTransportError } from './error.mapper.js';
 import { NOOP_RWEBTRANSPORT_METRICS, type RWebTransportAdapterMetrics } from './metrics.js';
 
+const CAN_ERROR_WRITABLE_STREAM = Number(process.versions.node.split('.')[0]) !== 24;
+
 export interface RWebTransportDatagramActivity {
   received(): void;
   sent(): void;
@@ -103,13 +105,15 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
           () => this.releaseWriter(),
           (error: unknown) => {
             if (this.writerReleased) return;
-            errorController(
-              controller,
-              mapRWebTransportError(error, {
-                target: 'session',
-                operation: 'datagram writer closed',
-              }),
-            );
+            if (CAN_ERROR_WRITABLE_STREAM) {
+              errorController(
+                controller,
+                mapRWebTransportError(error, {
+                  target: 'session',
+                  operation: 'datagram writer closed',
+                }),
+              );
+            }
             this.releaseWriter();
           },
         );
@@ -160,8 +164,13 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
   async close(reason?: unknown): Promise<void> {
     const error = reason ?? new DOMException('Datagram session closed', 'AbortError');
     errorController(this.readController, error);
-    errorController(this.writeController, error);
-    await Promise.allSettled([this.reader.cancel(reason), this.writer.abort(reason)]);
+    if (CAN_ERROR_WRITABLE_STREAM) {
+      errorController(this.writeController, error);
+    }
+    await Promise.allSettled([
+      this.reader.cancel(reason),
+      ...(CAN_ERROR_WRITABLE_STREAM ? [this.writer.abort(reason)] : []),
+    ]);
     this.releaseReader();
     this.releaseWriter();
   }

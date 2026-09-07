@@ -1,7 +1,8 @@
 // Generated from rwebtransport 0.2.2, SHA-256 21883683820cb299a9a4fb288b3ece4e7ffe2d93f04b430b6c04b5c9ea556e08.
 // Copyright 2026 Dacely Cloud. Apache-2.0; see LICENSE and NOTICE in this directory.
 // Modified by nest-webtransport contributors: handle rejected session cleanup;
-// bound incoming stream collections; resolve the dependency's binaries; preserve error identity.
+// bound incoming stream collections; resolve the dependency's binaries; preserve error identity;
+// avoid stream close/error races after a local session close.
 // Regenerate with: node scripts/vendor-rwebtransport.mjs --write
 // src/loader.ts
 import { createRequire } from "module";
@@ -97,6 +98,7 @@ var SessionCore = class {
   droppedIncomingDatagrams = 0;
   /** True once the session has reached its terminal (closed) state. */
   closedState = false;
+  localCloseRequested = false;
   /** True once the session has been established (`ready`/`serverReady`). */
   readyState = false;
   /** True when the session reached its terminal state through an error. */
@@ -260,6 +262,7 @@ var SessionCore = class {
    */
   close(code, reason) {
     if (this.closedState || !this.transport) return;
+    this.localCloseRequested = true;
     this.transport.closeSession(code >>> 0, new TextEncoder().encode(reason));
   }
   /** Tell the peer this session is draining (send a DRAIN capsule). */
@@ -533,7 +536,7 @@ var SessionCore = class {
     for (const d of this.statsRequests.values()) d.reject(err);
     for (const d of this.keyingMaterialRequests.values()) d.reject(err);
     for (const sink of this.receives.values()) sink.onSessionClose(err);
-    for (const sink of this.sends.values()) sink.onSessionClose(err);
+    for (const sink of this.sends.values()) sink.onSessionClose(err, error === void 0);
     this.opens.clear();
     this.writes.clear();
     this.datagramAcks.clear();
@@ -1117,7 +1120,7 @@ var WebTransportSendStream = class extends WritableStream {
     );
     session.registerSend(streamId, {
       onStopSending(code) {
-        if (closeRequested) {
+        if (closeRequested || session.localCloseRequested) {
           session.unregisterSend(streamId);
           return;
         }
@@ -1132,8 +1135,8 @@ var WebTransportSendStream = class extends WritableStream {
         }
         session.unregisterSend(streamId);
       },
-      onSessionClose(error) {
-        if (closeRequested) {
+      onSessionClose(error, clean) {
+        if (clean || closeRequested || session.localCloseRequested) {
           session.unregisterSend(streamId);
           return;
         }
