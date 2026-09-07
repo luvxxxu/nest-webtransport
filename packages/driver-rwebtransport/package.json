@@ -1,6 +1,6 @@
 {
   "name": "webtransport-driver-rwebtransport",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "rwebtransport driver for the WebTransport core contracts",
   "type": "module",
   "sideEffects": false,
@@ -15,7 +15,12 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.spec.ts",
+    "!src/**/*.test.ts",
+    "LICENSE",
+    "vendor"
   ],
   "engines": {
     "node": ">=24 <25 || >=26 <27"
@@ -24,15 +29,25 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. packages/driver-rwebtransport/src",
     "publint": "publint",
     "prepack": "bun run build"
   },
   "dependencies": {
     "webtransport-core": "workspace:*",
-    "rwebtransport": "^0.2.2"
+    "rwebtransport": "0.2.2"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luvxxxu/nest-webtransport.git",
+    "directory": "packages/driver-rwebtransport"
+  },
+  "homepage": "https://github.com/luvxxxu/nest-webtransport#readme",
+  "bugs": {
+    "url": "https://github.com/luvxxxu/nest-webtransport/issues"
   }
 }

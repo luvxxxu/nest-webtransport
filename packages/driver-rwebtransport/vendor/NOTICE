@@ -1,0 +1,41 @@
+rwebtransport
+Copyright 2026 Dacely Cloud
+
+This product includes software developed at Dacely Cloud
+(https://github.com/dacely-cloud).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------------
+
+This distribution vendors and/or links the following third-party software.
+Each remains under its own license; the terms below govern those components,
+not the Apache-2.0 license that covers the rwebtransport project itself.
+
+1. quiche  (vendored at vendor/quiche/)
+   🥧 Savoury implementation of the QUIC transport protocol and HTTP/3.
+   Copyright (C) 2018-2024, Cloudflare, Inc.
+   Licensed under the BSD 2-Clause License.
+   See vendor/quiche/COPYING for the full license text.
+   https://github.com/cloudflare/quiche
+
+2. BoringSSL  (built and linked via the `boring` / `boring-sys` crates)
+   Copyright (C) The BoringSSL Authors.
+   Licensed under a mix of the OpenSSL License, the SSLeay License, the
+   ISC license, and the Apache-2.0 license (for code imported from Google).
+   https://boringssl.googlesource.com/boringssl/
+
+3. neon  (build/runtime dependency)
+   Rust bindings for writing safe and fast Node.js native addons.
+   Licensed under the MIT License.
+   https://github.com/neon-bindings/neon
+
+The TLS configuration ("Chrome / Google cipher suite") default was adapted
+from an internal reference implementation and mirrors the cipher suites,
+elliptic curve groups, and signature algorithms advertised by Google Chrome.
