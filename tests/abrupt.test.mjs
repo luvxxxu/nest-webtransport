@@ -16,8 +16,7 @@ test('killed client: native idle timeout must not become an unhandled rejection'
         '--input-type=module',
         '-e',
         `
-      import {createRequire} from 'node:module';
-      const {WebTransport} = createRequire(${JSON.stringify(new URL('../packages/driver-rwebtransport/package.json', import.meta.url).pathname)})('rwebtransport');
+      const {WebTransport} = await import(${JSON.stringify(new URL('../packages/driver-rwebtransport/vendor/rwebtransport.mjs', import.meta.url).href)});
       const client = new WebTransport(${JSON.stringify(fixture.url)}, {origin: ${JSON.stringify(fixture.origin)}, serverCertificateHashes: [{algorithm: 'sha-256', value: Uint8Array.from(${JSON.stringify(fixture.hash)})}]});
       await client.ready;
       console.log('ready');

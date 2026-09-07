@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { WebTransport } from '../packages/driver-rwebtransport/vendor/rwebtransport.mjs';
 import { createTransportFixture, readAll, waitFor } from './transport-fixture.mjs';
-
-const { WebTransport } = createRequire(
-  new URL('../packages/driver-rwebtransport/package.json', import.meta.url),
-)('rwebtransport');
 
 async function connect(fixture, url = fixture.url, origin = fixture.origin) {
   const client = new WebTransport(url, {

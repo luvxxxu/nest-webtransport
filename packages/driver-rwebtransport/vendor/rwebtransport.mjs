@@ -1093,6 +1093,7 @@ var WebTransportSendStream = class extends WritableStream {
    */
   constructor(session, streamId, options = {}) {
     let controller;
+    let closeRequested = false;
     super(
       {
         start(c) {
@@ -1102,10 +1103,12 @@ var WebTransportSendStream = class extends WritableStream {
           return session.write(streamId, chunk);
         },
         close() {
+          closeRequested = true;
           session.finStream(streamId);
           session.unregisterSend(streamId);
         },
         abort(reason) {
+          closeRequested = true;
           session.resetStream(streamId, errorCode(reason));
           session.unregisterSend(streamId);
         }
@@ -1114,6 +1117,10 @@ var WebTransportSendStream = class extends WritableStream {
     );
     session.registerSend(streamId, {
       onStopSending(code) {
+        if (closeRequested) {
+          session.unregisterSend(streamId);
+          return;
+        }
         try {
           controller.error(
             new WebTransportError("peer sent STOP_SENDING", {
@@ -1126,6 +1133,10 @@ var WebTransportSendStream = class extends WritableStream {
         session.unregisterSend(streamId);
       },
       onSessionClose(error) {
+        if (closeRequested) {
+          session.unregisterSend(streamId);
+          return;
+        }
         try {
           controller.error(error);
         } catch {

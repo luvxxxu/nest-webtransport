@@ -13,6 +13,10 @@ rejection. No global process handler is installed and session errors still reach
 The loader resolves the original dependency's binary directory, and the bundle imports its public
 error class to preserve `instanceof` identity. No Rust, QUIC, TLS or protocol logic is modified.
 
+When an application has already requested a stream FIN, peer session termination no longer calls
+`WritableStream`'s error path again. This avoids a Node 24 Web Streams close/error race while the
+native writer is settling.
+
 `node scripts/vendor-rwebtransport.mjs` checks both the exact upstream SHA-256 and the generated
 output. `--write` regenerates it. Review/remove this compatibility bundle when upgrading upstream;
 do not silently apply the patch to another source version.

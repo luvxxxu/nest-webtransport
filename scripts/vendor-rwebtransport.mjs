@@ -31,6 +31,26 @@ const patched = source
     'void core.closed.promise.then(() => this.sessions.delete(sessionId), () => this.sessions.delete(sessionId));',
   )
   .replace(
+    '  constructor(session, streamId, options = {}) {\n    let controller;\n',
+    '  constructor(session, streamId, options = {}) {\n    let controller;\n    let closeRequested = false;\n',
+  )
+  .replace(
+    '        close() {\n          session.finStream(streamId);',
+    '        close() {\n          closeRequested = true;\n          session.finStream(streamId);',
+  )
+  .replace(
+    '        abort(reason) {\n          session.resetStream(streamId, errorCode(reason));',
+    '        abort(reason) {\n          closeRequested = true;\n          session.resetStream(streamId, errorCode(reason));',
+  )
+  .replace(
+    '      onStopSending(code) {\n        try {\n          controller.error(',
+    '      onStopSending(code) {\n        if (closeRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(',
+  )
+  .replace(
+    '      onSessionClose(error) {\n        try {\n          controller.error(error);\n        } catch {\n        }\n        session.unregisterSend(streamId);\n      }\n    });\n    this.streamId = streamId;',
+    '      onSessionClose(error) {\n        if (closeRequested) {\n          session.unregisterSend(streamId);\n          return;\n        }\n        try {\n          controller.error(error);\n        } catch {\n        }\n        session.unregisterSend(streamId);\n      }\n    });\n    this.streamId = streamId;',
+  )
+  .replace(
     /this.incomingBidirectionalStreams = new ReadableStream\(\{[\s\S]*?\n {4}\}\);/,
     (match) =>
       match.replace('    });', '    }, new CountQueuingStrategy({ highWaterMark: 256 }));'),
