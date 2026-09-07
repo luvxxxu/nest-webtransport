@@ -1,0 +1,5 @@
+# Keep source and generated vendor bundles identical across platforms.
+* text=auto eol=lf
+
+# Preserve the upstream license verbatim.
+packages/driver-rwebtransport/vendor/LICENSE -text
