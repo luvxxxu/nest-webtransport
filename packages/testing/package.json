@@ -1,6 +1,6 @@
 {
   "name": "nest-webtransport-testing",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Test doubles for NestJS WebTransport applications",
   "type": "module",
   "sideEffects": false,
@@ -15,7 +15,11 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.spec.ts",
+    "!src/**/*.test.ts",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20.11"
@@ -24,7 +28,7 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. packages/testing/src",
     "publint": "publint",
     "prepack": "bun run build"
   },
@@ -33,5 +37,15 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luvxxxu/nest-webtransport.git",
+    "directory": "packages/testing"
+  },
+  "homepage": "https://github.com/luvxxxu/nest-webtransport#readme",
+  "bugs": {
+    "url": "https://github.com/luvxxxu/nest-webtransport/issues"
   }
 }
