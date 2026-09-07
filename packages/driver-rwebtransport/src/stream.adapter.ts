@@ -216,6 +216,8 @@ class WritableBridge {
 
   private readonly writer: WritableStreamDefaultWriter<Uint8Array>;
   private finished = false;
+  private closing = false;
+  private closePromise: Promise<void> | undefined;
   private resetPromise: Promise<void> | undefined;
 
   constructor(
@@ -227,7 +229,7 @@ class WritableBridge {
     this.writable = new WritableStream<Uint8Array>({
       start: (controller) => {
         const abort = () => {
-          if (this.finished) return;
+          if (this.finished || this.closing) return;
           errorController(controller, this.lifecycle.signal.reason);
           void this.reset(this.lifecycle.signal.reason).catch(() => {});
         };
@@ -236,7 +238,7 @@ class WritableBridge {
         void this.writer.closed.then(
           () => this.finish(),
           (error: unknown) => {
-            if (this.finished) return;
+            if (this.finished || this.closing) return;
             const mapped = mapRWebTransportError(error, {
               target: 'stream',
               operation: 'send stream closed',
@@ -262,20 +264,15 @@ class WritableBridge {
         }
       },
       close: async () => {
-        try {
-          await this.writer.close();
-        } catch (error) {
-          const mapped = mapRWebTransportError(error, {
-            target: 'stream',
-            operation: 'close send stream',
-          });
-          this.lifecycle.abort(mapped);
-          throw mapped;
-        } finally {
-          this.finish();
-        }
+        this.closing = true;
+        this.closePromise = this.performClose();
+        return this.closePromise;
       },
       abort: async (reason) => {
+        if (this.closing) {
+          await this.closePromise;
+          return;
+        }
         try {
           await this.writer.abort(reason);
         } catch (error) {
@@ -291,8 +288,26 @@ class WritableBridge {
   }
 
   reset(reason: unknown): Promise<void> {
+    if (this.closing) {
+      return this.closePromise ?? Promise.resolve();
+    }
     this.resetPromise ??= this.performReset(reason);
     return this.resetPromise;
+  }
+
+  private async performClose(): Promise<void> {
+    try {
+      await this.writer.close();
+    } catch (error) {
+      const mapped = mapRWebTransportError(error, {
+        target: 'stream',
+        operation: 'close send stream',
+      });
+      this.lifecycle.abort(mapped);
+      throw mapped;
+    } finally {
+      this.finish();
+    }
   }
 
   private async performReset(reason: unknown): Promise<void> {
