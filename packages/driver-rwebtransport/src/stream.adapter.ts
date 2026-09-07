@@ -49,6 +49,18 @@ function streamId(value: number): bigint {
   return BigInt(value);
 }
 
+function errorController(
+  controller: ReadableStreamDefaultController<Uint8Array> | WritableStreamDefaultController,
+  reason: unknown,
+): void {
+  try {
+    controller.error(reason);
+  } catch {
+    // The Web Streams implementation can be closing concurrently with a peer abort.
+    // A terminal controller must not turn that harmless race into an unhandled rejection.
+  }
+}
+
 class StreamLifecycle {
   readonly controller = new AbortController();
 
@@ -110,7 +122,7 @@ class ReadableBridge {
       start: (controller) => {
         const abort = () => {
           if (this.finished) return;
-          controller.error(this.lifecycle.signal.reason);
+          errorController(controller, this.lifecycle.signal.reason);
           void this.stop(this.lifecycle.signal.reason).catch(() => {});
         };
         this.lifecycle.signal.addEventListener('abort', abort, { once: true });
@@ -121,7 +133,7 @@ class ReadableBridge {
             target: 'stream',
             operation: 'receive stream closed',
           });
-          controller.error(mapped);
+          errorController(controller, mapped);
           this.finish(false);
           this.lifecycle.abort(mapped);
         });
@@ -142,7 +154,7 @@ class ReadableBridge {
             target: 'stream',
             operation: 'read stream',
           });
-          controller.error(mapped);
+          errorController(controller, mapped);
           this.lifecycle.abort(mapped);
           this.finish(false);
         }
@@ -216,7 +228,7 @@ class WritableBridge {
       start: (controller) => {
         const abort = () => {
           if (this.finished) return;
-          controller.error(this.lifecycle.signal.reason);
+          errorController(controller, this.lifecycle.signal.reason);
           void this.reset(this.lifecycle.signal.reason).catch(() => {});
         };
         this.lifecycle.signal.addEventListener('abort', abort, { once: true });
@@ -229,7 +241,7 @@ class WritableBridge {
               target: 'stream',
               operation: 'send stream closed',
             });
-            controller.error(mapped);
+            errorController(controller, mapped);
             this.lifecycle.abort(mapped);
             this.finish();
           },

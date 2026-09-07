@@ -53,6 +53,33 @@ describe('native stream terminal propagation', () => {
     reader.releaseLock();
   });
 
+  it('tolerates a parent abort racing with an application writable close', async () => {
+    const parent = new AbortController();
+    let finishClose!: () => void;
+    const native = new WritableStream<Uint8Array>({
+      close: () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        }),
+    });
+    Object.defineProperty(native, 'streamId', { value: 5 });
+    const stream = new RWebTransportSendStreamAdapter(
+      native as WebTransportSendStream,
+      createRWebTransportStreamAbortContext(parent.signal),
+    );
+    const writer = stream.writable.getWriter();
+    const closing = writer.close().catch(() => undefined);
+
+    await tick();
+    parent.abort(new Error('session ended while closing'));
+    finishClose();
+    await closing;
+    await tick();
+
+    expect(native.locked).toBe(false);
+    writer.releaseLock();
+  });
+
   it('observes an errored readable even when the bridge already buffered a chunk', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const native = new ReadableStream<Uint8Array>({

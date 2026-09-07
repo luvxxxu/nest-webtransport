@@ -14,6 +14,17 @@ const NOOP_DATAGRAM_ACTIVITY: RWebTransportDatagramActivity = Object.freeze({
   sent() {},
 });
 
+function errorController(
+  controller: ReadableStreamDefaultController<Uint8Array> | WritableStreamDefaultController,
+  reason: unknown,
+): void {
+  try {
+    controller.error(reason);
+  } catch {
+    // The Web Streams implementation can be closing concurrently with a session abort.
+  }
+}
+
 export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
   readonly readable: ReadableStream<Uint8Array>;
   readonly writable: WritableStream<Uint8Array>;
@@ -38,7 +49,8 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
         this.readController = controller;
         void this.reader.closed.catch((error: unknown) => {
           if (this.readerReleased) return;
-          controller.error(
+          errorController(
+            controller,
             mapRWebTransportError(error, {
               target: 'session',
               operation: 'datagram reader closed',
@@ -60,7 +72,8 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
           metrics.datagramReceived(result.value.byteLength);
           controller.enqueue(result.value);
         } catch (error) {
-          controller.error(
+          errorController(
+            controller,
             mapRWebTransportError(error, {
               target: 'session',
               operation: 'read datagram',
@@ -90,7 +103,8 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
           () => this.releaseWriter(),
           (error: unknown) => {
             if (this.writerReleased) return;
-            controller.error(
+            errorController(
+              controller,
               mapRWebTransportError(error, {
                 target: 'session',
                 operation: 'datagram writer closed',
@@ -145,8 +159,8 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
 
   async close(reason?: unknown): Promise<void> {
     const error = reason ?? new DOMException('Datagram session closed', 'AbortError');
-    this.readController.error(error);
-    this.writeController.error(error);
+    errorController(this.readController, error);
+    errorController(this.writeController, error);
     await Promise.allSettled([this.reader.cancel(reason), this.writer.abort(reason)]);
     this.releaseReader();
     this.releaseWriter();
