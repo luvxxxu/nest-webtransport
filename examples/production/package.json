@@ -1,0 +1,29 @@
+{
+  "name": "nest-webtransport-example-production",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "start": "node --env-file-if-exists=.env --enable-source-maps dist/main.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/core": "^12.0.1",
+    "@opentelemetry/api": "^1.9.0",
+    "nest-webtransport": "workspace:*",
+    "nest-webtransport-otel": "workspace:*",
+    "redis": "^5.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "webtransport-driver-rwebtransport": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.3"
+  }
+}

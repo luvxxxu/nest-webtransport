@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nest-webtransport
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nest-webtransport
+  template:
+    metadata:
+      labels:
+        app: nest-webtransport
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: app
+          image: ghcr.io/example/nest-webtransport:replace-me
+          ports:
+            - name: webtransport
+              containerPort: 4433
+              protocol: UDP
+            - name: operations
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: WEBTRANSPORT_HOST
+              value: 0.0.0.0
+            - name: WEBTRANSPORT_PORT
+              value: "4433"
+            - name: WEBTRANSPORT_CERT_PATH
+              value: /run/tls/tls.crt
+            - name: WEBTRANSPORT_KEY_PATH
+              value: /run/tls/tls.key
+            - name: WEBTRANSPORT_ALLOWED_ORIGINS
+              value: https://app.example.com
+            - name: WEBTRANSPORT_JWT_ISSUER
+              value: https://auth.example.com
+            - name: WEBTRANSPORT_JWT_AUDIENCE
+              value: webtransport
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nest-webtransport
+                  key: redis-url
+            - name: WEBTRANSPORT_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nest-webtransport
+                  key: jwt-secret
+          volumeMounts:
+            - name: tls
+              mountPath: /run/tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: operations
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: operations
+            periodSeconds: 10
+            timeoutSeconds: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: tls
+          secret:
+            secretName: nest-webtransport-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nest-webtransport
+spec:
+  selector:
+    app: nest-webtransport
+  ports:
+    - name: webtransport
+      port: 443
+      targetPort: webtransport
+      protocol: UDP
+    - name: operations
+      port: 3000
+      targetPort: operations
+      protocol: TCP
