@@ -4,8 +4,6 @@ import type { WebTransportDatagramChannel as CoreDatagramChannel } from 'webtran
 import { mapRWebTransportError } from './error.mapper.js';
 import { NOOP_RWEBTRANSPORT_METRICS, type RWebTransportAdapterMetrics } from './metrics.js';
 
-const CAN_ERROR_WRITABLE_STREAM = Number(process.versions.node.split('.')[0]) !== 24;
-
 export interface RWebTransportDatagramActivity {
   received(): void;
   sent(): void;
@@ -27,6 +25,18 @@ function errorController(
   }
 }
 
+function isSessionTermination(reason: unknown): boolean {
+  if (reason !== null && typeof reason === 'object' && 'scope' in reason) {
+    return (reason as { scope?: unknown }).scope === 'SESSION';
+  }
+
+  if (reason instanceof DOMException || reason instanceof Error) {
+    return reason.name === 'AbortError' || /session (?:closed|ended)/i.test(reason.message);
+  }
+
+  return false;
+}
+
 export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
   readonly readable: ReadableStream<Uint8Array>;
   readonly writable: WritableStream<Uint8Array>;
@@ -37,6 +47,7 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
   private writeController!: WritableStreamDefaultController;
   private readerReleased = false;
   private writerReleased = false;
+  private writeClosing = false;
 
   constructor(
     private readonly native: NativeDatagramChannel,
@@ -105,7 +116,7 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
           () => this.releaseWriter(),
           (error: unknown) => {
             if (this.writerReleased) return;
-            if (CAN_ERROR_WRITABLE_STREAM) {
+            if (!this.writeClosing) {
               errorController(
                 controller,
                 mapRWebTransportError(error, {
@@ -131,6 +142,7 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
         }
       },
       close: async () => {
+        this.writeClosing = true;
         try {
           await this.writer.close();
         } catch (error) {
@@ -143,6 +155,7 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
         }
       },
       abort: async (reason) => {
+        this.writeClosing = true;
         try {
           await this.writer.abort(reason);
         } catch (error) {
@@ -164,12 +177,12 @@ export class RWebTransportDatagramAdapter implements CoreDatagramChannel {
   async close(reason?: unknown): Promise<void> {
     const error = reason ?? new DOMException('Datagram session closed', 'AbortError');
     errorController(this.readController, error);
-    if (CAN_ERROR_WRITABLE_STREAM) {
+    if (!this.writeClosing) {
       errorController(this.writeController, error);
     }
     await Promise.allSettled([
       this.reader.cancel(reason),
-      ...(CAN_ERROR_WRITABLE_STREAM ? [this.writer.abort(reason)] : []),
+      ...(!this.writeClosing && !isSessionTermination(reason) ? [this.writer.abort(reason)] : []),
     ]);
     this.releaseReader();
     this.releaseWriter();

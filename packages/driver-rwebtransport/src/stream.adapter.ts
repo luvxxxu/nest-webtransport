@@ -14,8 +14,6 @@ import {
 import { createNativeStreamError, mapRWebTransportError } from './error.mapper.js';
 import { NOOP_RWEBTRANSPORT_METRICS, type RWebTransportAdapterMetrics } from './metrics.js';
 
-const CAN_ERROR_WRITABLE_STREAM = Number(process.versions.node.split('.')[0]) !== 24;
-
 export interface RWebTransportStreamAbortContext {
   readonly signal: AbortSignal;
   subscribe(listener: (reason: unknown) => void): () => void;
@@ -63,12 +61,16 @@ function errorController(
   }
 }
 
-function closeController(controller: ReadableStreamDefaultController<Uint8Array>): void {
-  try {
-    controller.close();
-  } catch {
-    // The readable may have reached a terminal state concurrently.
+function isSessionTermination(reason: unknown): boolean {
+  if (reason !== null && typeof reason === 'object' && 'scope' in reason) {
+    return (reason as { scope?: unknown }).scope === 'SESSION';
   }
+
+  if (reason instanceof DOMException || reason instanceof Error) {
+    return reason.name === 'AbortError' || /session (?:closed|ended)/i.test(reason.message);
+  }
+
+  return false;
 }
 
 class StreamLifecycle {
@@ -132,11 +134,7 @@ class ReadableBridge {
       start: (controller) => {
         const abort = () => {
           if (this.finished) return;
-          if (CAN_ERROR_WRITABLE_STREAM) {
-            errorController(controller, this.lifecycle.signal.reason);
-          } else {
-            closeController(controller);
-          }
+          errorController(controller, this.lifecycle.signal.reason);
           void this.stop(this.lifecycle.signal.reason).catch(() => {});
         };
         this.lifecycle.signal.addEventListener('abort', abort, { once: true });
@@ -147,14 +145,7 @@ class ReadableBridge {
             target: 'stream',
             operation: 'receive stream closed',
           });
-          if (
-            !CAN_ERROR_WRITABLE_STREAM &&
-            (mapped.scope === 'SESSION' || /session closed/i.test(mapped.message))
-          ) {
-            closeController(controller);
-          } else {
-            errorController(controller, mapped);
-          }
+          errorController(controller, mapped);
           this.finish(false);
           this.lifecycle.abort(mapped);
         });
@@ -251,11 +242,14 @@ class WritableBridge {
       start: (controller) => {
         const abort = () => {
           if (this.finished || this.closing) return;
-          if (CAN_ERROR_WRITABLE_STREAM) {
-            errorController(controller, this.lifecycle.signal.reason);
-            void this.reset(this.lifecycle.signal.reason).catch(() => {});
-          } else {
+          errorController(controller, this.lifecycle.signal.reason);
+          if (
+            this.resetPromise !== undefined ||
+            isSessionTermination(this.lifecycle.signal.reason)
+          ) {
             this.finish();
+          } else {
+            void this.reset(this.lifecycle.signal.reason).catch(() => {});
           }
         };
         this.lifecycle.signal.addEventListener('abort', abort, { once: true });
@@ -268,9 +262,7 @@ class WritableBridge {
               target: 'stream',
               operation: 'send stream closed',
             });
-            if (CAN_ERROR_WRITABLE_STREAM) {
-              errorController(controller, mapped);
-            }
+            errorController(controller, mapped);
             this.lifecycle.abort(mapped);
             this.finish();
           },
@@ -286,7 +278,6 @@ class WritableBridge {
             operation: 'write stream',
           });
           if (
-            !CAN_ERROR_WRITABLE_STREAM ||
             this.lifecycle.signal.aborted ||
             mapped.scope === 'SESSION' ||
             /session closed/i.test(mapped.message)
@@ -309,19 +300,13 @@ class WritableBridge {
           await this.closePromise;
           return;
         }
-        if (!CAN_ERROR_WRITABLE_STREAM) {
-          this.finish();
-          return;
-        }
         try {
           await this.writer.abort(reason);
         } catch (error) {
-          if (CAN_ERROR_WRITABLE_STREAM) {
-            throw mapRWebTransportError(error, {
-              target: 'stream',
-              operation: 'abort send stream',
-            });
-          }
+          throw mapRWebTransportError(error, {
+            target: 'stream',
+            operation: 'abort send stream',
+          });
         } finally {
           this.finish();
         }
@@ -346,7 +331,6 @@ class WritableBridge {
         operation: 'close send stream',
       });
       if (
-        !CAN_ERROR_WRITABLE_STREAM ||
         this.lifecycle.signal.aborted ||
         mapped.scope === 'SESSION' ||
         /session closed/i.test(mapped.message)
