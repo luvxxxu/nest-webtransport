@@ -60,7 +60,8 @@ const webTransport = WebTransportModule.forRoot({
     },
   },
   limits: {
-    server: { maxSessions: 10_000 },
+    server: { maxSessions: 1_000, maxConcurrentHandlers: 128, maxPendingHandlers: 512,
+      maxQueuedDatagramBytes: 8 * 1024 * 1024, maxStreams: 1_024 },
     ip: { maxSessions: 50, sessionsPerSecond: 5 },
     session: {
       maxBidirectionalStreams: 64,
@@ -139,8 +140,8 @@ All framework-owned queues are bounded. The security effect of each overflow pol
 
 Handler scheduling supports `drop`, `reject`, and `close-session`. Reliable streams wait for
 scheduler capacity before another stream is accepted from the session collection; their body
-backpressure remains in the underlying Web Stream. Datagram rate and size failures are dropped and
-logged because datagrams are unreliable by definition.
+backpressure remains in the underlying Web Stream. Datagram rate and size failures are counted as runtime drops; logs are rate limited. A global byte budget includes datagrams in queues
+and in running/pending handlers. Reliable streams that exceed global stream/work capacity are reset.
 
 Framework ceilings do not replace operating-system, QUIC-library, container, or load-balancer
 limits. Size file-descriptor, UDP-buffer, memory, and connection limits together, then validate them
@@ -203,12 +204,11 @@ This deliberately rejects additional work rather than allowing a reconnect loop 
 background operations. An authenticator that never settles can exhaust its allocated capacity;
 use downstream I/O deadlines as well as the admission timeout.
 
-The native driver separately caps established sessions (`maxSessions`, default 50,000) and pending
+The native driver separately caps established sessions (`maxSessions`, default 1,000) and pending
 session callbacks (`maxPendingSessionCallbacks`, default 1,024), including callbacks whose peers
 have already left. Align these ceilings with Nest's limits. Driver `stop({timeoutMs})` bounds the
 whole stop operation; a native shutdown timeout rejects and leaves state at `STOPPING`, permitting
-a retry once native closure settles. Runtime health reports failed liveness if a previously
-running driver has stopped unexpectedly.
+a retry once native closure settles. Runtime health reports failed liveness if a running runtime finds its driver outside RUNNING, including a stalled STOPPING state.
 
 Timers must fit Node's 2,147,483,647 ms range; larger values are rejected instead of becoming a
 1 ms timeout. OpenTelemetry path attributes omit query strings and fragments to avoid exposing
@@ -225,3 +225,28 @@ Stream backpressure. These caps protect work waiting before the Nest scheduler c
 Framework stream limits cover decorator-managed incoming streams. Application-created outgoing
 streams and manually consumed collections also require application-level concurrency and lifetime
 management; the module cannot infer when an arbitrary background workflow has finished.
+
+
+## v1 lifetime and diagnostics
+
+The production example retains JWT expiry in the principal and closes the session at that deadline.
+Applications must still implement their own revocation/distributed logout policy. Redis operations in
+the example use bounded queues, startup/command/shutdown deadlines and fail readiness on dependency
+failure. Exhausted reconnect attempts or a stuck command fail liveness so an orchestrator can restart.
+
+Manual incoming collections and application-created outgoing streams do not pass through framework
+pumps. Call `SessionContext.touch()` after successful I/O, or disable the framework idle timer with
+`idleTimeoutMs: 0` and implement idle cleanup in the application. Unresolved user Promises retain
+server work reservations even after disconnect; use cancellation and deadlines on every downstream I/O.
+
+Use runtime `getRuntimeStats()` alongside driver counters. Authentication rejection, datagram size,
+rate, queue and aggregate-budget drops belong to the runtime metrics, not native network drop metrics.
+Runtime reason labels come from a fixed vocabulary and never include client paths, IPs or tokens.
+The logger and `observability.onError` share a configurable per-second cap (default 100); suppressed
+records are counted. Async callback rejections are isolated and their pending record count uses the
+same cap. The optional diagnostic callback receives raw errors, so redact them before
+export. OTel emits generic exception details unless `recordExceptionDetails: true` is explicitly enabled.
+
+References: [Node timer range](https://nodejs.org/api/timers.html),
+[WebTransport specification](https://www.w3.org/TR/webtransport/),
+[Redis production guidance](https://redis.io/docs/latest/develop/clients/nodejs/produsage/).

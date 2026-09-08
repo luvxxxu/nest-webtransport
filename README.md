@@ -4,9 +4,10 @@ A driver-based WebTransport framework for NestJS. It keeps Nest discovery and ex
 from the HTTP/3/QUIC implementation, exposes Web Standard streams, and places explicit bounds on
 framework-owned work queues.
 
-Version `0.1.0` provides the core, Nest runtime, native driver, testing utilities and optional
+Version `1.0.0-rc.1` is the v1 release candidate. It provides the core, Nest runtime, native driver, testing utilities and optional
 OpenTelemetry integration. Release checks cover real native QUIC and Chromium communication,
 admission/overload behavior, abrupt peer termination, sustained load, and clean package installation.
+Production hardening and remaining qualification gates are tracked in [the v1 report](docs/v1-readiness.md).
 See [release verification](docs/releasing.md) for the required checks and their scope.
 
 ## Packages
@@ -185,7 +186,8 @@ when at least one decorator handler of that kind is registered:
 When a handler of that kind exists—named or unnamed—do not call `getReader()` on its collection in
 gateway code. Receive the selected value through `@Payload()` or `@Stream()` instead. If the path
 has no handler at all for a kind, the runtime leaves that collection untouched and an `@OnSession()`
-workflow may consume it manually. Once a stream object reaches a stream handler, its own
+workflow may consume it manually. After successful manual or outgoing I/O, call `context.touch?.()`
+to refresh the framework idle deadline, or set `security.idleTimeoutMs: 0` and own idle cleanup. Once a stream object reaches a stream handler, its own
 `stream.readable` belongs to application code and preserves Web Stream backpressure.
 
 ## Runtime requirements

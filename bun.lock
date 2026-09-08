@@ -76,11 +76,11 @@
     },
     "packages/core": {
       "name": "webtransport-core",
-      "version": "0.1.0",
+      "version": "1.0.0-rc.1",
     },
     "packages/driver-rwebtransport": {
       "name": "webtransport-driver-rwebtransport",
-      "version": "0.1.0",
+      "version": "1.0.0-rc.1",
       "dependencies": {
         "rwebtransport": "0.2.2",
         "webtransport-core": "workspace:*",
@@ -88,7 +88,7 @@
     },
     "packages/nest-webtransport": {
       "name": "nest-webtransport",
-      "version": "0.1.0",
+      "version": "1.0.0-rc.1",
       "dependencies": {
         "webtransport-core": "workspace:*",
         "webtransport-driver-rwebtransport": "workspace:*",
@@ -102,7 +102,7 @@
     },
     "packages/otel": {
       "name": "nest-webtransport-otel",
-      "version": "0.1.0",
+      "version": "1.0.0-rc.1",
       "dependencies": {
         "webtransport-core": "workspace:*",
       },
@@ -116,7 +116,7 @@
     },
     "packages/testing": {
       "name": "nest-webtransport-testing",
-      "version": "0.1.0",
+      "version": "1.0.0-rc.1",
       "dependencies": {
         "webtransport-core": "workspace:*",
       },

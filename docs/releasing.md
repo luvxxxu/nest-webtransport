@@ -1,7 +1,9 @@
 # Releasing
 
-The five packages are versioned together. The initial release is `0.1.0`; pre-1.0 minor releases
-may change API contracts. This repository prepares artifacts but never publishes automatically.
+The five packages are versioned together at `1.0.0-rc.1`. This is a v1 candidate; promote to `1.0.0`
+only after the remaining target-environment gates in [v1 readiness](v1-readiness.md) pass. The candidate
+introduces aggregate limits and changes conservative defaults; review the migration notes below.
+This repository prepares artifacts but never publishes automatically.
 
 ## Required checks
 
@@ -54,3 +56,24 @@ workflow on each target OS/architecture before advertising it as tested.
 
 Use a release candidate dist-tag while verifying registry publication. Registry ownership,
 credentials and successful publication are separate from local artifact validation.
+
+
+## Migrating from 0.1.0
+
+- Default runtime/native session ceilings are reduced to 1,000. Set explicit validated ceilings for
+  larger workloads. `limits.server` now includes `maxConcurrentHandlers`, `maxPendingHandlers`,
+  `maxStreams` and `maxQueuedDatagramBytes`. A fully constructed core `WebTransportServerLimits`
+  object must supply these fields; module overrides remain partial.
+- Global execution capacity includes admission and retained disconnected work. Budget exhaustion
+  rejects admission and uses the configured handler overflow policy for events.
+- `getRuntimeStats()` and `webtransport.runtime.*` metrics distinguish policy drops/rejections from
+  driver counters. Alert on both. Logs are rate limited by default.
+- For manual/outgoing I/O use `SessionContext.touch()`, or own idle cleanup with `idleTimeoutMs: 0`.
+- Failed native writes/closes now reject instead of reporting success. Handle transport failures.
+- Default OTel exception details are redacted. Enable raw details only with exporter redaction.
+- Production JWT sessions expire with their token. Redis offline buffering is disabled and stalled
+  commands or exhausted reconnects fail liveness. Configure an orchestrator restart policy.
+- Request-scoped Nest globals retain their real provider token and owning module; registered
+  provider failures propagate instead of falling back to a new unconfigured enhancer.
+
+Review consumer applications against the candidate before making a stable SemVer commitment.

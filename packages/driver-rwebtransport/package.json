@@ -1,6 +1,6 @@
 {
   "name": "webtransport-driver-rwebtransport",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "rwebtransport driver for the WebTransport core contracts",
   "type": "module",
   "sideEffects": false,

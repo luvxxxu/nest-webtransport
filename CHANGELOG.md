@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.1
+
+- Fix request-scoped Nest global enhancers, module-owned provider resolution and fail-open enhancer fallback.
+- Bound aggregate server work, active incoming streams, retained datagram bytes and log volume.
+- Keep reservations until real work settles; stop late resolver/enhancer completion from invoking closed sessions.
+- Add manual I/O activity refresh, runtime policy metrics and private error diagnostics; fix driver liveness mismatch.
+- Preserve active streams during incoming collection cancellation and propagate failed native writes/closes.
+- Bound connection stats sampling and correct virtual transport direction/abort behavior.
+- Make the production example bootable with bounded Redis failure handling, JWT session expiry and race-safe presence cleanup.
+- Repair container build inputs and strengthen real bootstrap, deployment and release checks.
+- Redact OTel exception details by default; expose bounded runtime rejection/drop reasons separately from driver metrics.
+- Reduce default session ceilings to 1,000. See docs/releasing.md for pre-v1 migration and qualification gates.
+
 ## 0.1.0
 
 Initial release of the core, NestJS integration, rwebtransport driver, testing utilities,

@@ -210,16 +210,25 @@ Default limits are:
 
 | Boundary | Default |
 | --- | ---: |
-| Global active sessions | 50,000 |
+| Global active sessions (including retained unfinished work) | 1,000 |
+| Global concurrent work, including authentication | 256 |
+| Additional global queued work | 1,024 |
+| Global active managed incoming streams | 2,048 |
+| Global retained datagram bytes | 16 MiB |
 | Active sessions per IP | 100 |
 | Session attempts per IP per second | 10 |
 | Bidirectional streams per session | 100 |
 | Unidirectional streams per session | 100 |
 | Datagrams per session per second | 1,000 |
-| Concurrent handlers | 64 |
-| Pending handlers | 128 |
+| Concurrent handlers per session | 64 |
+| Pending handlers per session | 128 |
 | Stream lifetime | 300 seconds |
 | Datagram queue | 256 |
+
+Datagram bytes remain charged while a packet is queued or a handler/resolver is running. Aggregate work
+reservations cover admission and both local and global queues. Non-cooperative disconnected work keeps
+its reservation until it settles. Global work overflow uses `execution.overflow`; the global byte
+ceiling drops the arriving datagram (a fitting `drop-oldest` replacement is still allowed).
 
 These are framework defaults, not a promise that the selected driver or host supports the same
 ceiling. A lower native or deployment limit wins.
@@ -293,7 +302,7 @@ Bun 1.3.12 manages dependencies and repository scripts. Production execution of 
 uses Node.js 24.x or 26.x, matching the `rwebtransport` 0.2.2 binary/runtime matrix; this is not a
 Bun-native server.
 
-The `0.1.0` release gate includes unit/virtual integration, actual native client/server QUIC with
+The v1 release-candidate gate includes unit/virtual integration, actual native client/server QUIC with
 certificate pinning, Chromium E2E, overload and stream-flood rejection, a killed-client native
 idle-timeout regression, sustained load with resource/memory checks, and clean npm tarball
 installation. The pinned driver includes a reproducibly patched upstream JavaScript bundle for
@@ -310,3 +319,24 @@ Before advertising a `1.0.0` API or a particular production deployment, addition
 - network loss, latency, jitter, reordering, MTU and NAT behavior under the expected workload;
 - a 24–72 hour soak and file-descriptor/native memory behavior at the target scale;
 - application-specific authentication, outbound work bounds and SemVer/API commitments.
+
+
+## v1 operation changes
+
+`SessionContext.touch()` refreshes the idle deadline for successful manually consumed/outgoing I/O.
+The framework idle timer can be disabled explicitly with `security.idleTimeoutMs: 0`. Decorator-managed
+streams suspend idle expiration while active, but retain their independent lifetime limit. Manual and
+outgoing streams need application-owned concurrency, drain, and lifetime management.
+
+`WebTransportHealthService.getRuntimeStats()` reports runtime admission and drop reasons separately
+from native transport counters. Runtime logs default to at most 100 records per second, with a
+suppression counter; `observability.maxLogsPerSecond` configures both this ceiling and the maximum
+number of records with unfinished asynchronous callbacks. Rejected callback Promises are isolated. An optional
+`observability.onError(error, record)` callback receives private diagnostics under the same log budget.
+Keep callbacks nonblocking and redact error details before exporting them. OTel discovers these
+runtime metrics automatically when its Nest module is present alongside the runtime.
+
+Health is unhealthy when a running runtime's driver leaves RUNNING, including a stuck STOPPING state.
+Normal runtime DRAINING remains live and unready. Drivers can expose the optional `session.drain()`
+notification; the runtime calls it before stopping intake. Cancelled incoming collections refuse new streams
+without closing sessions that still have active streams to finish.

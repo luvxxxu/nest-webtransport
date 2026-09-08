@@ -8,20 +8,45 @@ const root = resolve(import.meta.dirname, '..');
 const temporary = await mkdtemp(join(tmpdir(), 'nest-webtransport-install-'));
 try {
   const dependencies = {};
-  for (const entry of await readdir(join(root, 'packages'))) {
-    const directory = join(root, 'packages', entry);
-    const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'));
+  const packages = await Promise.all(
+    (await readdir(join(root, 'packages'))).map(async (entry) => {
+      const directory = join(root, 'packages', entry);
+      const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'));
+      return { directory, manifest };
+    }),
+  );
+  const versions = new Map(packages.map(({ manifest }) => [manifest.name, manifest.version]));
+  for (const { directory, manifest } of packages) {
     const tarball = join(temporary, `${manifest.name}.tgz`);
     execFileSync('bun', ['pm', 'pack', '--filename', tarball], { cwd: directory, stdio: 'pipe' });
     const packed = JSON.parse(
       execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }),
     );
     assert.equal(packed.license, 'MIT');
-    assert.equal(packed.version, '0.1.0');
+    assert.equal(packed.version, manifest.version);
     assert.ok(
       !JSON.stringify(packed).includes('workspace:'),
       'Published metadata must not contain workspace references',
     );
+    for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const [name, range] of Object.entries(manifest[section] ?? {})) {
+        if (typeof range !== 'string' || !range.startsWith('workspace:')) continue;
+        const version = versions.get(name);
+        assert.ok(version, `${manifest.name}: ${section}.${name} must name a workspace package`);
+        const selector = range.slice('workspace:'.length);
+        const expected =
+          selector === '*'
+            ? version
+            : selector === '^' || selector === '~'
+              ? `${selector}${version}`
+              : selector;
+        assert.equal(
+          packed[section]?.[name],
+          expected,
+          `${manifest.name}: packed ${section}.${name} must target the current workspace version`,
+        );
+      }
+    }
     const files = execFileSync('tar', ['-tf', tarball], { encoding: 'utf8' });
     assert.ok(files.includes('package/LICENSE'));
     assert.ok(!/\.spec\.|\.test\.|\.env/.test(files), 'Do not publish tests or secrets');
