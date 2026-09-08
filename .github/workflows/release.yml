@@ -31,3 +31,19 @@ jobs:
       - run: bunx playwright install --with-deps chromium
       - run: bun run release:check
       - run: bun audit
+
+  production-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image from a clean checkout
+        run: docker build --file examples/production/Dockerfile --tag nest-webtransport-production:ci .
+      - name: Verify image runtime and installed modules
+        run: >-
+          docker run --rm --workdir /app/examples/production --entrypoint node nest-webtransport-production:ci
+          --input-type=module -e
+          "import 'reflect-metadata';
+          import { AppModule } from './dist/app.module.js';
+          import { createClient } from 'redis';
+          if (Number(process.versions.node.split('.')[0]) !== 26 || typeof AppModule.register !== 'function' || typeof createClient !== 'function') process.exit(1);"

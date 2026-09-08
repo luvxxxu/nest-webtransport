@@ -9,6 +9,7 @@ const MAX_AUTHORIZATION_BYTES = 8 * 1024;
 export interface JwtPrincipal {
   readonly userId: string;
   readonly roles: readonly string[];
+  readonly expiresAt: number;
 }
 
 @Injectable()
@@ -44,7 +45,12 @@ export function verifyHs256Jwt(token: string, config: ProductionConfig): JwtPrin
   const [encodedHeader, encodedPayload, encodedSignature] = parts as [string, string, string];
   const header = parseJsonObject(encodedHeader);
   const claims = parseJsonObject(encodedPayload);
-  if (header.alg !== 'HS256' || (header.typ !== undefined && header.typ !== 'JWT')) {
+  if (
+    header.alg !== 'HS256' ||
+    (header.typ !== undefined && header.typ !== 'JWT') ||
+    header.crit !== undefined ||
+    header.b64 !== undefined
+  ) {
     throw new Error('Unsupported JWT header');
   }
 
@@ -71,6 +77,7 @@ export function verifyHs256Jwt(token: string, config: ProductionConfig): JwtPrin
     claims.sub.length === 0 ||
     typeof claims.exp !== 'number' ||
     !Number.isSafeInteger(claims.exp) ||
+    !Number.isSafeInteger(claims.exp * 1_000) ||
     claims.exp <= now ||
     (claims.nbf !== undefined &&
       (typeof claims.nbf !== 'number' || !Number.isSafeInteger(claims.nbf) || claims.nbf > now))
@@ -81,7 +88,11 @@ export function verifyHs256Jwt(token: string, config: ProductionConfig): JwtPrin
   const roles = Array.isArray(claims.roles)
     ? claims.roles.filter((role): role is string => typeof role === 'string')
     : [];
-  return Object.freeze({ userId: claims.sub, roles: Object.freeze(roles) });
+  return Object.freeze({
+    userId: claims.sub,
+    roles: Object.freeze(roles),
+    expiresAt: claims.exp * 1_000,
+  });
 }
 
 function parseJsonObject(encoded: string): Record<string, unknown> {

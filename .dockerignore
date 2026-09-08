@@ -1,0 +1,16 @@
+.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/*.crt
+coverage
+playwright-report
+test-results
+.codex
+.agents
+.cache
