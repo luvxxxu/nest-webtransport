@@ -49,6 +49,7 @@ export interface MockSessionCloseInfo {
   readonly error?: unknown;
 }
 
+/** Session counters use the server endpoint's perspective. */
 export interface MockSessionStatsHooks {
   readonly onStreamOpened?: () => void;
   readonly onStreamClosed?: () => void;
@@ -128,9 +129,9 @@ class MockSessionConnection {
         : { maxDatagramSize: options.maxDatagramSize }),
       ...(options.datagramOverflow === undefined ? {} : { overflow: options.datagramOverflow }),
       assertOpen: () => this.assertConnected(),
-      onSent: (byteLength) => this.#hooks.onDatagramSent?.(byteLength),
-      onReceived: (byteLength) => this.#hooks.onDatagramReceived?.(byteLength),
-      onDropped: () => this.#hooks.onDatagramDropped?.(),
+      onSecondToFirst: (byteLength) => this.#hooks.onDatagramSent?.(byteLength),
+      onFirstToSecond: (byteLength) => this.#hooks.onDatagramReceived?.(byteLength),
+      onSecondDropped: () => this.#hooks.onDatagramDropped?.(),
       onCloseSession: (reason) => {
         void this.abort(reason);
       },
@@ -179,8 +180,10 @@ class MockSessionConnection {
     trackedPair = createMockBidirectionalStreamPair({
       id,
       ...this.#streamOptions,
-      onFirstToSecondBytes: (byteLength) => this.#recordStreamBytes(byteLength),
-      onSecondToFirstBytes: (byteLength) => this.#recordStreamBytes(byteLength),
+      onFirstToSecondBytes: (byteLength) =>
+        this.#recordStreamBytes(byteLength, owner === this.#second),
+      onSecondToFirstBytes: (byteLength) =>
+        this.#recordStreamBytes(byteLength, owner !== this.#second),
       onTerminal: () => this.#finishStream(trackedPair),
     });
     this.#startStream(trackedPair);
@@ -209,7 +212,8 @@ class MockSessionConnection {
     trackedPair = createMockUnidirectionalStreamPair({
       id,
       ...this.#streamOptions,
-      onFirstToSecondBytes: (byteLength) => this.#recordStreamBytes(byteLength),
+      onFirstToSecondBytes: (byteLength) =>
+        this.#recordStreamBytes(byteLength, owner === this.#second),
       onTerminal: () => this.#finishStream(trackedPair),
     });
     this.#startStream(trackedPair);
@@ -270,9 +274,12 @@ class MockSessionConnection {
     }
   }
 
-  #recordStreamBytes(byteLength: number): void {
-    this.#hooks.onBytesSent?.(byteLength);
-    this.#hooks.onBytesReceived?.(byteLength);
+  #recordStreamBytes(byteLength: number, fromServer: boolean): void {
+    if (fromServer) {
+      this.#hooks.onBytesSent?.(byteLength);
+    } else {
+      this.#hooks.onBytesReceived?.(byteLength);
+    }
   }
 
   #beginTermination(info: MockSessionCloseInfo): Promise<void> {

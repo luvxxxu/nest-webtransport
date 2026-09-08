@@ -94,6 +94,17 @@ describe('VirtualWebTransportDriver', () => {
     await client.sendDatagram(clientPayload);
     clientPayload[0] = 9;
     expect(await receiveOne(server.datagrams.readable)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(driver.getStats().datagrams).toEqual({ received: 1, sent: 0, dropped: 0 });
+    expect(driver.getStats().bytes).toEqual({ received: 3, sent: 0 });
+
+    const backing = Buffer.alloc(4_096);
+    const packet = backing.subarray(10, 12);
+    packet.set([6, 7]);
+    await client.sendDatagram(packet);
+    packet[0] = 9;
+    const received = await receiveOne(server.datagrams.readable);
+    expect(received).toEqual(new Uint8Array([6, 7]));
+    expect(received?.buffer.byteLength).toBe(2);
 
     const response = new Uint8Array([4, 5]);
     await writeOne(server.datagrams.writable, response);
@@ -101,8 +112,8 @@ describe('VirtualWebTransportDriver', () => {
     expect(await client.receiveDatagram()).toEqual(new Uint8Array([4, 5]));
 
     const stats = driver.getStats();
-    expect(stats.datagrams).toEqual({ received: 2, sent: 2, dropped: 0 });
-    expect(stats.bytes).toEqual({ received: 5, sent: 5 });
+    expect(stats.datagrams).toEqual({ received: 2, sent: 1, dropped: 0 });
+    expect(stats.bytes).toEqual({ received: 5, sent: 2 });
     await driver.stop();
   });
 
@@ -142,6 +153,7 @@ describe('VirtualWebTransportDriver', () => {
     }
     await writeOne(clientUni.writable, new Uint8Array([20, 21, 22]));
     expect(await receiveOne(serverUni.readable)).toEqual(new Uint8Array([20, 21, 22]));
+    expect(driver.getStats().bytes).toEqual({ received: 5, sent: 1 });
 
     expect(driver.getStats().streams).toEqual({ active: 2, total: 2 });
     await closeWritable(clientBidi.writable);
@@ -187,6 +199,7 @@ describe('VirtualWebTransportDriver', () => {
     }
     await writeOne(serverUni.writable, new Uint8Array([31, 32]));
     expect(await receiveOne(clientUni.readable)).toEqual(new Uint8Array([31, 32]));
+    expect(driver.getStats().bytes).toEqual({ received: 0, sent: 3 });
 
     await serverBidi.reset();
     await serverUni.reset();
@@ -258,7 +271,7 @@ describe('VirtualWebTransportDriver', () => {
 
     expect(await receiveOne(server.datagrams.readable)).toEqual(new Uint8Array([2]));
     expect(await receiveOne(server.datagrams.readable)).toEqual(new Uint8Array([3]));
-    expect(driver.getStats().datagrams).toEqual({ received: 3, sent: 3, dropped: 1 });
+    expect(driver.getStats().datagrams).toEqual({ received: 3, sent: 0, dropped: 1 });
     await driver.stop();
   });
 

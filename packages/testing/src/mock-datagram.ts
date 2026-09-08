@@ -20,6 +20,10 @@ interface MockDatagramPairOptions extends MockDatagramOptions {
   readonly onReceived?: (byteLength: number) => void;
   readonly onDropped?: () => void;
   readonly onCloseSession?: (reason: unknown) => void;
+  readonly onFirstToSecond?: (byteLength: number) => void;
+  readonly onSecondToFirst?: (byteLength: number) => void;
+  readonly onFirstDropped?: () => void;
+  readonly onSecondDropped?: () => void;
 }
 
 export class MockWebTransportDatagramChannel implements WebTransportDatagramChannel {
@@ -58,7 +62,7 @@ export class MockWebTransportDatagramChannel implements WebTransportDatagramChan
               },
             );
           }
-          options.send(datagram.slice());
+          options.send(new Uint8Array(datagram));
         },
       },
       new CountQueuingStrategy({ highWaterMark: options.queueSize }),
@@ -102,17 +106,31 @@ export function createMockDatagramChannelPair(
   const queueOptions = {
     capacity: queueSize,
     overflow,
-    ...(options.onDropped === undefined
-      ? {}
-      : { onDrop: (_datagram: Uint8Array) => options.onDropped?.() }),
     ...(options.onCloseSession === undefined ? {} : { onCloseSession: options.onCloseSession }),
   } as const;
-  const firstIncoming = new BoundedValueQueue<Uint8Array>(queueOptions);
-  const secondIncoming = new BoundedValueQueue<Uint8Array>(queueOptions);
+  const firstIncoming = new BoundedValueQueue<Uint8Array>({
+    ...queueOptions,
+    onDrop: () => {
+      options.onDropped?.();
+      options.onFirstDropped?.();
+    },
+  });
+  const secondIncoming = new BoundedValueQueue<Uint8Array>({
+    ...queueOptions,
+    onDrop: () => {
+      options.onDropped?.();
+      options.onSecondDropped?.();
+    },
+  });
 
-  const deliver = (target: BoundedValueQueue<Uint8Array>, datagram: Uint8Array): void => {
+  const deliver = (
+    target: BoundedValueQueue<Uint8Array>,
+    datagram: Uint8Array,
+    onTransfer: ((byteLength: number) => void) | undefined,
+  ): void => {
     options.assertOpen?.();
     options.onSent?.(datagram.byteLength);
+    onTransfer?.(datagram.byteLength);
     const result = target.push(datagram);
     if (result.accepted) {
       options.onReceived?.(datagram.byteLength);
@@ -123,13 +141,13 @@ export function createMockDatagramChannelPair(
     incoming: firstIncoming,
     maxDatagramSize,
     queueSize,
-    send: (datagram) => deliver(secondIncoming, datagram),
+    send: (datagram) => deliver(secondIncoming, datagram, options.onFirstToSecond),
   });
   const second = new MockWebTransportDatagramChannel({
     incoming: secondIncoming,
     maxDatagramSize,
     queueSize,
-    send: (datagram) => deliver(firstIncoming, datagram),
+    send: (datagram) => deliver(firstIncoming, datagram, options.onSecondToFirst),
   });
 
   return {

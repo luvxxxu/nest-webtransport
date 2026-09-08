@@ -52,6 +52,7 @@ export class BoundedBytePipe {
 
   #readController!: ReadableStreamDefaultController<Uint8Array>;
   #writeController: WritableStreamDefaultController | undefined;
+  #removeWritableAbortListener: (() => void) | undefined;
   #capacityWaiter: Deferred | undefined;
   #state: 'open' | 'closed' | 'aborted' = 'open';
   #terminalNotified = false;
@@ -89,13 +90,25 @@ export class BoundedBytePipe {
       {
         start: (controller) => {
           this.#writeController = controller;
+          // WritableStream delays the sink abort callback until an in-flight
+          // write finishes. Observe its signal so a backpressured write can be
+          // interrupted before that callback would otherwise wait forever.
+          const abort = (): void => this.#abort(controller.signal.reason, false);
+          controller.signal.addEventListener('abort', abort, { once: true });
+          this.#removeWritableAbortListener = () =>
+            controller.signal.removeEventListener('abort', abort);
         },
         write: async (chunk) => {
-          this.#assertChunk(chunk);
-          await this.#waitForCapacity();
-          this.#assertOpen();
-          this.#readController.enqueue(chunk.slice());
-          this.#onBytes?.(chunk.byteLength);
+          try {
+            this.#assertChunk(chunk);
+            await this.#waitForCapacity();
+            this.#assertOpen();
+            this.#readController.enqueue(new Uint8Array(chunk));
+            this.#onBytes?.(chunk.byteLength);
+          } catch (error) {
+            this.abort(error);
+            throw error;
+          }
         },
         close: () => {
           this.close();
@@ -124,6 +137,10 @@ export class BoundedBytePipe {
   }
 
   abort(reason?: unknown): void {
+    this.#abort(reason, true);
+  }
+
+  #abort(reason: unknown, errorWritable: boolean): void {
     if (this.#state !== 'open') {
       return;
     }
@@ -136,10 +153,12 @@ export class BoundedBytePipe {
     } catch {
       // The readable may already be terminal.
     }
-    try {
-      this.#writeController?.error(error);
-    } catch {
-      // The writable may already be terminal.
+    if (errorWritable) {
+      try {
+        this.#writeController?.error(error);
+      } catch {
+        // The writable may already be terminal.
+      }
     }
     this.#notifyTerminal();
   }
@@ -187,6 +206,8 @@ export class BoundedBytePipe {
       return;
     }
     this.#terminalNotified = true;
+    this.#removeWritableAbortListener?.();
+    this.#removeWritableAbortListener = undefined;
     this.#onTerminal?.();
   }
 }
