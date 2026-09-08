@@ -36,6 +36,10 @@ export interface RWebTransportDriverOptions {
   readonly reusePort?: boolean;
   readonly responseHeaders?: Readonly<Record<string, string>>;
   readonly defaultDrainTimeoutMs?: number;
+  /** Minimum interval between cached native connection snapshots. Defaults to 1 second. */
+  readonly connectionStatsIntervalMs?: number;
+  /** Private diagnostic hook for asynchronous native server failures. Never awaited. */
+  readonly onError?: (error: unknown) => void | Promise<void>;
   /** Bounds established native sessions, including sessions being rejected/closed. */
   readonly maxSessions?: number;
   /** Bounds outstanding session callbacks, even after their peer disconnects. */
@@ -63,6 +67,8 @@ export class RWebTransportDriver implements WebTransportDriver {
   private readonly serverFactory: RWebTransportServerFactory | undefined;
   private readonly serverOptions: RWebTransportServerAdapterOptions;
   private readonly defaultDrainTimeoutMs: number;
+  private readonly connectionStatsIntervalMs: number;
+  private readonly onError: RWebTransportDriverOptions['onError'];
   private readonly maxSessions: number;
   private readonly maxPendingSessionCallbacks: number;
   private readonly metrics: RWebTransportAdapterMetrics;
@@ -72,6 +78,7 @@ export class RWebTransportDriver implements WebTransportDriver {
   private stopPromise: Promise<void> | undefined;
   private removeStartAbortListener: () => void = () => {};
   private refreshingStats = false;
+  private lastStatsRefreshAt = Number.NEGATIVE_INFINITY;
   private state: CoreServerState = WebTransportServerState.STOPPED;
   private sessionsTotal = 0;
   private sessionsRejected = 0;
@@ -98,7 +105,16 @@ export class RWebTransportDriver implements WebTransportDriver {
         : { responseHeaders: { ...options.responseHeaders } }),
     };
     this.defaultDrainTimeoutMs = options.defaultDrainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
-    this.maxSessions = options.maxSessions ?? 50_000;
+    this.maxSessions = options.maxSessions ?? 1_000;
+    this.connectionStatsIntervalMs = options.connectionStatsIntervalMs ?? 1_000;
+    this.onError = options.onError;
+    if (
+      !Number.isFinite(this.connectionStatsIntervalMs) ||
+      this.connectionStatsIntervalMs < 1 ||
+      this.connectionStatsIntervalMs > 2_147_483_647
+    ) {
+      throw new RangeError('connectionStatsIntervalMs must be between 1 and 2147483647');
+    }
     this.maxPendingSessionCallbacks = options.maxPendingSessionCallbacks ?? 1_024;
     for (const [name, value] of Object.entries({
       maxSessions: this.maxSessions,
@@ -224,6 +240,7 @@ export class RWebTransportDriver implements WebTransportDriver {
 
   private async performStart(options: WebTransportServerOptions): Promise<void> {
     this.state = WebTransportServerState.STARTING;
+    this.lastStatsRefreshAt = Number.NEGATIVE_INFINITY;
     const server = new RWebTransportServerAdapter(this.serverOptions, this.serverFactory);
     this.server = server;
     if (options.signal !== undefined) {
@@ -336,7 +353,6 @@ export class RWebTransportDriver implements WebTransportDriver {
       id,
     );
     this.sessions.set(session.id, session);
-    void this.captureSessionStats(session);
 
     if (
       this.state === WebTransportServerState.DRAINING ||
@@ -376,11 +392,16 @@ export class RWebTransportDriver implements WebTransportDriver {
     void session.captureConnectionStats().catch(() => {});
   }
 
-  private handleServerError(_error: unknown): void {
+  private handleServerError(error: unknown): void {
     if (
       this.state === WebTransportServerState.RUNNING ||
       this.state === WebTransportServerState.STARTING
     ) {
+      try {
+        void Promise.resolve(this.onError?.(error)).catch(() => {});
+      } catch {
+        // Diagnostics must not prevent shutdown or escape the native event boundary.
+      }
       void this.stop({ graceful: false }).catch(() => {});
     }
   }
@@ -433,14 +454,31 @@ export class RWebTransportDriver implements WebTransportDriver {
   }
 
   private async refreshConnectionStats(): Promise<void> {
-    if (this.refreshingStats) {
+    const now = this.now();
+    if (
+      this.refreshingStats ||
+      this.sessions.size === 0 ||
+      (now >= this.lastStatsRefreshAt &&
+        now - this.lastStatsRefreshAt < this.connectionStatsIntervalMs)
+    ) {
       return;
     }
     this.refreshingStats = true;
+    this.lastStatsRefreshAt = now;
+    // Bound outstanding native requests independently of the number of sessions.
+    // Health checks and telemetry collectors share these best-effort snapshots.
+    const sessions = [...this.sessions.values()];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < sessions.length) {
+        const session = sessions[next++];
+        if (session !== undefined && this.sessions.get(session.id) === session) {
+          await this.captureSessionStats(session);
+        }
+      }
+    };
     try {
-      await Promise.all(
-        [...this.sessions.values()].map((session) => this.captureSessionStats(session)),
-      );
+      await Promise.all(Array.from({ length: Math.min(32, sessions.length) }, worker));
     } finally {
       this.refreshingStats = false;
     }

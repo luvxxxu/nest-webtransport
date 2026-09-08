@@ -1,4 +1,8 @@
-import type { WebTransportReceiveStream, WebTransportSendStream } from 'rwebtransport';
+import {
+  WebTransportError,
+  type WebTransportReceiveStream,
+  type WebTransportSendStream,
+} from 'rwebtransport';
 import { describe, expect, it } from 'vitest';
 import {
   createRWebTransportStreamAbortContext,
@@ -101,3 +105,27 @@ describe('native stream terminal propagation', () => {
     await expect(stream.readable.getReader().read()).rejects.toThrow();
   });
 });
+
+it.each(['write', 'close'] as const)(
+  'rejects %s when the native transport loses the session',
+  async (operation) => {
+    const native = new WritableStream<Uint8Array>({
+      [operation]() {
+        throw new WebTransportError('session closed', { source: 'session' });
+      },
+    });
+    Object.defineProperty(native, 'streamId', { value: 6 });
+    const stream = new RWebTransportSendStreamAdapter(
+      native as WebTransportSendStream,
+      createRWebTransportStreamAbortContext(new AbortController().signal),
+    );
+    const writer = stream.writable.getWriter();
+    void writer.closed.catch(() => {});
+    const pending = operation === 'write' ? writer.write(new Uint8Array([1])) : writer.close();
+    await expect(pending).rejects.toThrow('session closed');
+    await tick();
+    expect(stream.signal.aborted).toBe(true);
+    expect(native.locked).toBe(false);
+    writer.releaseLock();
+  },
+);

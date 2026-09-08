@@ -41,6 +41,7 @@ interface IncomingStreamBridge<T> {
 function mapIncomingStream<Native, Adapted>(
   source: ReadableStream<Native>,
   adapt: (stream: Native) => Adapted,
+  discard: (stream: Native) => Promise<unknown>,
 ): IncomingStreamBridge<Adapted> {
   const reader = source.getReader();
   let finished = false;
@@ -58,6 +59,7 @@ function mapIncomingStream<Native, Adapted>(
     if (finished) {
       return;
     }
+    finished = true;
     try {
       await reader.cancel(reason);
     } catch (error) {
@@ -71,28 +73,35 @@ function mapIncomingStream<Native, Adapted>(
   };
 
   return {
-    readable: new ReadableStream<Adapted>({
-      pull: async (controller) => {
-        try {
-          const result = await reader.read();
-          if (result.done) {
-            controller.close();
+    readable: new ReadableStream<Adapted>(
+      {
+        pull: async (controller) => {
+          try {
+            const result = await reader.read();
+            if (finished) {
+              if (!result.done) await discard(result.value);
+              return;
+            }
+            if (result.done) {
+              controller.close();
+              release();
+              return;
+            }
+            controller.enqueue(adapt(result.value));
+          } catch (error) {
+            controller.error(
+              mapRWebTransportError(error, {
+                target: 'session',
+                operation: 'read incoming stream',
+              }),
+            );
             release();
-            return;
           }
-          controller.enqueue(adapt(result.value));
-        } catch (error) {
-          controller.error(
-            mapRWebTransportError(error, {
-              target: 'session',
-              operation: 'read incoming stream',
-            }),
-          );
-          release();
-        }
+        },
+        cancel,
       },
-      cancel,
-    }),
+      { highWaterMark: 0 },
+    ),
     cancel,
   };
 }
@@ -163,11 +172,13 @@ export class RWebTransportSessionAdapter implements CoreSession {
       native.incomingBidirectionalStreams,
       (stream: NativeBidirectionalStream) =>
         new RWebTransportBidirectionalStreamAdapter(stream, this.streamAbortContext, metrics),
+      (stream) => Promise.allSettled([stream.readable.cancel(), stream.writable.abort()]),
     );
     this.uniBridge = mapIncomingStream(
       native.incomingUnidirectionalStreams,
       (stream: NativeReceiveStream) =>
         new RWebTransportReceiveStreamAdapter(stream, this.streamAbortContext, metrics),
+      (stream) => stream.cancel().catch(() => {}),
     );
     this.incomingBidirectionalStreams = this.bidiBridge.readable;
     this.incomingUnidirectionalStreams = this.uniBridge.readable;

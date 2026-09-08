@@ -2,7 +2,7 @@
 // Copyright 2026 Dacely Cloud. Apache-2.0; see LICENSE and NOTICE in this directory.
 // Modified by nest-webtransport contributors: handle rejected session cleanup;
 // bound incoming stream collections; resolve the dependency's binaries; preserve error identity;
-// avoid stream close/error races after a local session close.
+// avoid stream close/error races after a local session close; release cancelled stream queues.
 // Regenerate with: node scripts/vendor-rwebtransport.mjs --write
 // src/loader.ts
 import { createRequire } from "module";
@@ -1211,6 +1211,73 @@ function buildConfig(url, options) {
     protocols: options.protocols ?? []
   };
 }
+// Keep ownership of queued streams so cancelling an incoming collection can
+// release their native resources without closing established application work.
+function incomingStreamQueue(core, bidi, overflow) {
+  let controller;
+  let waiting = false;
+  let cancelled = false;
+  let ended = false;
+  const queue = [];
+  const discard = (id) => {
+    try { core.stopSending(id, 0); } catch {}
+    core.unregisterReceive(id);
+    if (bidi) {
+      try { core.resetStream(id, 0); } catch {}
+      core.unregisterSend(id);
+    }
+  };
+  const readable = new ReadableStream({
+    start(c) { controller = c; },
+    pull() {
+      if (queue.length > 0) {
+        controller.enqueue(queue.shift().stream);
+        if (ended && queue.length === 0) safeClose(controller);
+      } else if (ended) {
+        safeClose(controller);
+      } else {
+        waiting = true;
+      }
+    },
+    cancel() {
+      cancelled = true;
+      waiting = false;
+      for (const entry of queue) discard(entry.id);
+      queue.length = 0;
+    }
+  }, new CountQueuingStrategy({ highWaterMark: 0 }));
+  return {
+    readable,
+    accept(id) {
+      if (cancelled || ended || core.isClosed) {
+        discard(id);
+        return;
+      }
+      if (!waiting && queue.length >= 256) {
+        overflow();
+        return;
+      }
+      const stream = bidi
+        ? new WebTransportBidirectionalStream(core, id)
+        : new WebTransportReceiveStream(core, id);
+      if (waiting) {
+        waiting = false;
+        controller.enqueue(stream);
+      } else {
+        queue.push({ id, stream });
+      }
+    },
+    close() {
+      ended = true;
+      if (queue.length === 0) safeClose(controller);
+    },
+    error(reason) {
+      ended = true;
+      queue.length = 0;
+      safeError(controller, reason);
+    }
+  };
+}
 var WebTransportSession = class {
   /**
    * The event dispatcher and command surface backing this session. Shared with
@@ -1266,49 +1333,18 @@ var WebTransportSession = class {
   constructor(core) {
     this.core = core;
     this.datagrams = new WebTransportDatagramDuplexStream(core);
-    let bidiController;
-    let uniController;
-    this.incomingBidirectionalStreams = new ReadableStream({
-      start: (c) => {
-        bidiController = c;
-      }
-    }, new CountQueuingStrategy({ highWaterMark: 256 }));
-    this.incomingUnidirectionalStreams = new ReadableStream({
-      start: (c) => {
-        uniController = c;
-      }
-    }, new CountQueuingStrategy({ highWaterMark: 256 }));
+    const overflow = () => this.close({ closeCode: 257, reason: "incoming stream capacity exceeded" });
+    const bidi = incomingStreamQueue(core, true, overflow);
+    const uni = incomingStreamQueue(core, false, overflow);
+    this.incomingBidirectionalStreams = bidi.readable;
+    this.incomingUnidirectionalStreams = uni.readable;
     core.setIncomingHandler({
-      onBidi: (id) => {
-        if ((bidiController.desiredSize ?? 0) <= 0) {
-          this.close({ closeCode: 257, reason: "incoming stream capacity exceeded" });
-          return;
-        }
-        try {
-          bidiController.enqueue(new WebTransportBidirectionalStream(core, id));
-        } catch {
-        }
-      },
-      onUni: (id) => {
-        if ((uniController.desiredSize ?? 0) <= 0) {
-          this.close({ closeCode: 257, reason: "incoming stream capacity exceeded" });
-          return;
-        }
-        try {
-          uniController.enqueue(new WebTransportReceiveStream(core, id));
-        } catch {
-        }
-      }
+      onBidi: (id) => bidi.accept(id),
+      onUni: (id) => uni.accept(id)
     });
-    core.closed.promise.then(
-      () => {
-        safeClose(bidiController);
-        safeClose(uniController);
-      },
-      (err) => {
-        safeError(bidiController, err);
-        safeError(uniController, err);
-      }
+    void core.closed.promise.then(
+      () => { bidi.close(); uni.close(); },
+      (error) => { bidi.error(error); uni.error(error); }
     );
   }
   /**

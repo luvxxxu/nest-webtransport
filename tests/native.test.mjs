@@ -143,3 +143,75 @@ test('native QUIC: stream flood cannot accumulate unbounded incoming objects beh
     await fixture.close();
   }
 });
+
+test('native QUIC: new streams during drain do not interrupt an active stream', {
+  timeout: 15_000,
+}, async () => {
+  let started;
+  const active = new Promise((resolve) => {
+    started = resolve;
+  });
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let completed = false;
+  const fixture = await createTransportFixture({
+    onUni: async (session, stream) => {
+      const payload = await readAll(stream.readable);
+      started();
+      await held;
+      const outgoing = await session.createUnidirectionalStream();
+      const writer = outgoing.writable.getWriter();
+      await writer.write(payload);
+      await writer.close();
+      writer.releaseLock();
+      completed = true;
+    },
+  });
+  let client;
+  let closing;
+  try {
+    client = await connect(fixture);
+    const initial = await client.createUnidirectionalStream();
+    const writer = initial.getWriter();
+    await writer.write(new Uint8Array([7, 8, 9]));
+    await writer.close();
+    writer.releaseLock();
+    await active;
+    const incoming = client.incomingUnidirectionalStreams.getReader();
+    const echoed = incoming.read().then(({ value }) => readAll(value));
+    closing = fixture.module.close();
+    let peerClosed = false;
+    void client.closed.then(
+      () => {
+        peerClosed = true;
+      },
+      () => {
+        peerClosed = true;
+      },
+    );
+    await waitFor(() => fixture.health.lifecycle.state === 'DRAINING');
+    await client.draining;
+    assert.equal(peerClosed, false);
+    assert.equal(completed, false);
+    for (let i = 0; i < 3; i++) {
+      const late = await client.createUnidirectionalStream();
+      const lateWriter = late.getWriter();
+      await lateWriter.write(new Uint8Array([1])).catch(() => {});
+      await lateWriter.close().catch(() => {});
+      lateWriter.releaseLock();
+    }
+    release();
+    assert.deepEqual(await echoed, new Uint8Array([7, 8, 9]));
+    assert.equal(completed, true);
+    incoming.releaseLock();
+    assert.equal((await client.closed).closeCode, 0);
+    await closing;
+  } finally {
+    release();
+    client?.close();
+    await closing;
+    await fixture.close();
+  }
+});

@@ -705,3 +705,107 @@ it('terminates datagram wrappers on idle native failure and discards buffered da
   reader.releaseLock();
   expect(native.readable.locked).toBe(false);
 });
+
+it('shares throttled connection snapshots and bounds outstanding native stats requests', async () => {
+  const server = new FakeNativeServer({ port: 0, cert: '', key: '' });
+  let now = 0;
+  const driver = new RWebTransportDriver({
+    serverFactory: () => server as unknown as NativeServer,
+    now: () => now,
+    connectionStatsIntervalMs: 1_000,
+  } as TestDriverOptions);
+  let accepted = 0;
+  driver.onSession(() => {
+    accepted++;
+  });
+  await driver.start(SERVER_OPTIONS);
+  const release = deferred<void>();
+  let calls = 0;
+  let active = 0;
+  let peak = 0;
+  for (let i = 0; i < 40; i++) {
+    const session = new FakeNativeSession();
+    const original = session.getStats.bind(session);
+    session.getStats = async () => {
+      calls++;
+      active++;
+      peak = Math.max(peak, active);
+      await release.promise;
+      active--;
+      return original();
+    };
+    server.emit(session);
+  }
+  await eventually(() => accepted === 40);
+  expect(driver.getStats().connections).toHaveLength(0);
+  expect(calls).toBe(32);
+  driver.getStats();
+  expect(calls).toBe(32);
+  release.resolve();
+  await eventually(() => driver.getStats().connections?.length === 40);
+  expect(calls).toBe(40);
+  expect(peak).toBe(32);
+  now = 999;
+  driver.getStats();
+  expect(calls).toBe(40);
+  now = 1_000;
+  driver.getStats();
+  await eventually(() => calls === 80);
+  await driver.stop({ graceful: false });
+});
+
+it('reports asynchronous server failure privately and isolates a rejected diagnostic hook', async () => {
+  const server = new FakeNativeServer({ port: 0, cert: '', key: '' });
+  const failures: unknown[] = [];
+  const driver = new RWebTransportDriver({
+    serverFactory: () => server as unknown as NativeServer,
+    onError: async (error) => {
+      failures.push(error);
+      throw new Error('diagnostic backend unavailable');
+    },
+  } as TestDriverOptions);
+  await driver.start(SERVER_OPTIONS);
+  server.close();
+  await eventually(() => driver.getStats().state === 'STOPPED');
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toBeInstanceOf(WebTransportDriverError);
+});
+
+it('releases a native stream delivered concurrently with incoming-reader cancellation', async () => {
+  const native = new FakeNativeSession();
+  let controller!: ReadableStreamDefaultController<NativeBidirectionalStream>;
+  Object.defineProperty(native, 'incomingBidirectionalStreams', {
+    value: new ReadableStream<NativeBidirectionalStream>({
+      start(value) {
+        controller = value;
+      },
+    }),
+  });
+  const metrics = metricRecorder();
+  const adapter = new RWebTransportSessionAdapter(native as unknown as NativeSession, metrics);
+  let stopped = 0;
+  let reset = 0;
+  const stream = nativeBidirectionalStream(
+    24,
+    {
+      cancel() {
+        stopped++;
+      },
+    },
+    {
+      abort() {
+        reset++;
+      },
+    },
+  );
+  const reader = adapter.incomingBidirectionalStreams.getReader();
+  const reading = reader.read();
+  await Promise.resolve();
+  controller.enqueue(stream);
+  await reader.cancel();
+  expect((await reading).done).toBe(true);
+  await eventually(() => stopped === 1 && reset === 1);
+  expect(metrics.opened).toBe(0);
+  reader.releaseLock();
+  await adapter.close();
+});

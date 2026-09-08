@@ -277,14 +277,6 @@ class WritableBridge {
             target: 'stream',
             operation: 'write stream',
           });
-          if (
-            this.lifecycle.signal.aborted ||
-            mapped.scope === 'SESSION' ||
-            /session closed/i.test(mapped.message)
-          ) {
-            this.finish();
-            return;
-          }
           this.lifecycle.abort(mapped);
           this.finish();
           throw mapped;
@@ -330,13 +322,6 @@ class WritableBridge {
         target: 'stream',
         operation: 'close send stream',
       });
-      if (
-        this.lifecycle.signal.aborted ||
-        mapped.scope === 'SESSION' ||
-        /session closed/i.test(mapped.message)
-      ) {
-        return;
-      }
       this.lifecycle.abort(mapped);
       throw mapped;
     } finally {

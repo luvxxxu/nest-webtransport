@@ -14,8 +14,8 @@ The loader resolves the original dependency's binary directory, and the bundle i
 error class to preserve `instanceof` identity. No Rust, QUIC, TLS or protocol logic is modified.
 
 When an application has already requested a stream FIN or local session close, peer termination no
-longer calls `WritableStream`'s error path again. The adapter also avoids forwarding terminal native
-write errors into a second Node 24 `WritableStream` error path while the native writer is settling.
+longer calls `WritableStream`'s error path again. The adapter preserves rejected writes and closes when the native transport fails, so unsuccessful
+transmission is never reported as a successful application write.
 
 `node scripts/vendor-rwebtransport.mjs` checks both the exact upstream SHA-256 and the generated
 output. `--write` regenerates it. Review/remove this compatibility bundle when upgrading upstream;
@@ -27,3 +27,9 @@ The compatibility bundle caps each incoming stream collection at 256 objects and
 session collection at 1,024; overflow closes the offending session with code 257. Stream body
 flow control stays unchanged. These adapter-level caps supplement the configurable Nest limits
 and protect the queue before Nest can consume it.
+
+Incoming stream collections keep explicit queue ownership and cancellation state. Cancelling a
+collection (including during Nest drain) stops queued and newly arriving streams, resets their
+send halves when bidirectional, and releases their native registrations. Streams already handed
+to the application remain usable. Cancellation is not treated as capacity overflow. Adapter
+collection readers do not prefetch streams into a second inaccessible queue.
