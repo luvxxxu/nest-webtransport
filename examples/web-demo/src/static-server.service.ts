@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -9,7 +10,11 @@ import {
 } from '@nestjs/common';
 
 import type { WebDemoConfig } from './config.js';
-import { bearerTokenMatches, type SessionTicketStore } from './session-ticket.store.js';
+import {
+  bearerTokenMatches,
+  SessionTicketCapacityError,
+  type SessionTicketStore,
+} from './session-ticket.store.js';
 
 const PUBLIC_DIRECTORY = fileURLToPath(new URL('../public/', import.meta.url));
 const PUBLIC_FILES: Readonly<Record<string, { file: string; contentType: string }>> = Object.freeze(
@@ -22,6 +27,7 @@ const PUBLIC_FILES: Readonly<Record<string, { file: string; contentType: string 
 @Injectable()
 export class StaticServer implements OnApplicationBootstrap, OnApplicationShutdown {
   private server: Server | undefined;
+  private readonly sockets = new Set<Socket>();
 
   constructor(
     private readonly config: WebDemoConfig,
@@ -38,6 +44,11 @@ export class StaticServer implements OnApplicationBootstrap, OnApplicationShutdo
     server.requestTimeout = 5_000;
     server.headersTimeout = 5_000;
     server.keepAliveTimeout = 5_000;
+    server.maxConnections = 128;
+    server.on('connection', (socket) => {
+      this.sockets.add(socket);
+      socket.once('close', () => this.sockets.delete(socket));
+    });
     this.server = server;
 
     await new Promise<void>((resolve, reject) => {
@@ -54,7 +65,16 @@ export class StaticServer implements OnApplicationBootstrap, OnApplicationShutdo
     this.server = undefined;
     if (server === undefined) return;
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error === undefined ? resolve() : reject(error)));
+      const timer = setTimeout(() => {
+        server.closeAllConnections();
+        for (const socket of this.sockets) socket.destroy();
+        resolve();
+      }, 1_000);
+      server.close((error) => {
+        clearTimeout(timer);
+        if (error === undefined) resolve();
+        else reject(error);
+      });
     });
   }
 
@@ -118,7 +138,19 @@ export class StaticServer implements OnApplicationBootstrap, OnApplicationShutdo
       return;
     }
 
-    const result = this.sessionTickets.issue(request.socket.remoteAddress ?? '');
+    let result: { ticket: string; expiresInMs: number };
+    try {
+      result = this.sessionTickets.issue(request.socket.remoteAddress ?? '');
+    } catch (error) {
+      if (!(error instanceof SessionTicketCapacityError)) throw error;
+      response.writeHead(503, {
+        'retry-after': '1',
+        'cache-control': 'no-store',
+        'content-type': 'text/plain; charset=utf-8',
+      });
+      response.end('Session ticket capacity reached. Retry shortly.');
+      return;
+    }
     this.sendHeaders(response, 'application/json; charset=utf-8');
     response.end(JSON.stringify(result));
   }

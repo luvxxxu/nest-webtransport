@@ -25,6 +25,7 @@ node --version
 
 ```bash
 bun install
+bun run build
 bun run --cwd examples/web-demo cert
 bun run --cwd examples/web-demo build
 bun run --cwd examples/web-demo start
@@ -65,6 +66,16 @@ http://localhost:3000
 세부정보가 기록됩니다. broadcast를 확인하려면 같은 주소를 탭 두 개에서 열고 양쪽 모두
 연결한 다음 한쪽에서 **Broadcast**를 누릅니다.
 
+단방향 스트림은 전체 수신 byte 수와 최대 256 byte의 미리보기를 확인 이벤트로 보냅니다.
+메시지가 길면 `truncated: true`가 표시되며, JSON 인코딩 후 데이터그램 한도를 넘는
+미리보기는 생략합니다. Echo/broadcast 응답이 1,200 byte 또는 연결의 데이터그램 한도를
+넘으면 `response-too-large` 오류 이벤트가 돌아옵니다.
+
+느린 수신자 한 명이 계속 메모리를 점유하지 않도록 세션당 송신 대기는 16개로 제한합니다.
+넘치는 알림은 폐기하며, 송신이 1초 동안 진행되지 않으면 해당 연결을 닫습니다.
+브라우저는 양방향 Echo 응답을 최대 1 MiB까지만 읽습니다. 연결 ticket 발급 한도에
+도달하면 HTTP `503`과 `Retry-After: 1`을 반환합니다.
+
 토큰을 일부러 한 글자 바꾼 뒤 다시 연결하면 WebTransport 연결 전에 실패해야 합니다. 정상
 토큰은 HTTP에서 한 번 확인되고, 브라우저는 10초 동안 한 번만 쓸 수 있는 ticket으로
 WebTransport에 연결합니다. ticket 원문은 서버 메모리에 저장하지 않으며, 발급받은 주소와
@@ -74,6 +85,7 @@ WebTransport에 연결합니다. ticket 원문은 서버 메모리에 저장하�
 
 터미널에서 `Control + C`를 누릅니다. Nest shutdown hook이 먼저 새 세션 수신을 막고, 진행
 중인 작업을 drain한 다음 WebTransport 서버를 닫습니다.
+HTTP 서버는 최대 128개 연결을 받고, 종료 시 1초 뒤 남아 있는 연결을 닫습니다.
 
 ## 연결되지 않을 때
 

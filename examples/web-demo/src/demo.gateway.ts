@@ -20,17 +20,28 @@ interface ClientDatagram {
   readonly message: string;
 }
 
+interface OutgoingQueue {
+  tail: Promise<void>;
+  count: number;
+  failed: boolean;
+}
+
+const MAX_PENDING_WRITES = 16;
+const WRITE_TIMEOUT_MS = 1_000;
+const PREVIEW_BYTES = 256;
+
 @WebTransportGateway('/demo')
 @Injectable()
 export class DemoGateway {
   private readonly logger = new Logger(DemoGateway.name);
   private readonly sessions = new Set<WebTransportSession>();
-  private readonly pendingDatagramWrites = new WeakMap<WebTransportSession, Promise<void>>();
+  private readonly pendingDatagramWrites = new WeakMap<WebTransportSession, OutgoingQueue>();
   private readonly encoder = new TextEncoder();
   private readonly decoder = new TextDecoder();
 
   @OnSession()
   async connected(@Session() session: WebTransportSession): Promise<void> {
+    session.signal.throwIfAborted();
     this.sessions.add(session);
     session.signal.addEventListener(
       'abort',
@@ -84,7 +95,7 @@ export class DemoGateway {
     );
     const delivered = result.filter((entry) => entry.status === 'fulfilled').length;
     this.logger.log(
-      `broadcast session=${session.id} recipients=${recipients} delivered=${delivered} message=${JSON.stringify(packet.message)}`,
+      `broadcast session=${session.id} recipients=${recipients} delivered=${delivered}`,
     );
   }
 
@@ -111,9 +122,10 @@ export class DemoGateway {
         const result = await reader.read();
         if (result.done) break;
         bytes += result.value.byteLength;
-        if (retainedBytes + result.value.byteLength <= 64 * 1024) {
-          chunks.push(result.value);
-          retainedBytes += result.value.byteLength;
+        const retained = Math.min(PREVIEW_BYTES - retainedBytes, result.value.byteLength);
+        if (retained > 0) {
+          chunks.push(new Uint8Array(result.value.subarray(0, retained)));
+          retainedBytes += retained;
         }
       }
     } finally {
@@ -121,7 +133,7 @@ export class DemoGateway {
     }
 
     const truncated = retainedBytes !== bytes;
-    const message = truncated ? undefined : this.decoder.decode(joinChunks(chunks, retainedBytes));
+    const message = this.decoder.decode(joinChunks(chunks, retainedBytes));
     this.logger.log(`unidirectional stream=${stream.id} bytes=${bytes}`);
     await this.sendPacket(session, {
       type: 'server-event',
@@ -161,6 +173,7 @@ export class DemoGateway {
         !('message' in value) ||
         (value.type !== 'echo' && value.type !== 'broadcast') ||
         typeof value.id !== 'string' ||
+        value.id.length > 128 ||
         typeof value.sentAt !== 'number' ||
         !Number.isFinite(value.sentAt) ||
         typeof value.message !== 'string' ||
@@ -168,28 +181,87 @@ export class DemoGateway {
       ) {
         return undefined;
       }
-      return value as ClientDatagram;
+      return { type: value.type, id: value.id, sentAt: value.sentAt, message: value.message };
     } catch {
       return undefined;
     }
   }
 
-  private sendPacket(session: WebTransportSession, packet: object): Promise<void> {
-    const previous = this.pendingDatagramWrites.get(session) ?? Promise.resolve();
-    const current = previous
+  private sendPacket(session: WebTransportSession, packet: Record<string, unknown>): Promise<void> {
+    if (session.signal.aborted) return Promise.reject(session.signal.reason);
+    let queue = this.pendingDatagramWrites.get(session);
+    if (queue === undefined) {
+      queue = { tail: Promise.resolve(), count: 0, failed: false };
+      this.pendingDatagramWrites.set(session, queue);
+    }
+    if (queue.failed || queue.count >= MAX_PENDING_WRITES) {
+      return Promise.reject(new Error('The outgoing datagram queue is full or closed.'));
+    }
+    const limit = Math.min(1_200, session.datagrams.maxDatagramSize);
+    let bytes = this.encoder.encode(JSON.stringify(packet));
+    if (bytes.byteLength > limit) {
+      bytes = this.encoder.encode(
+        JSON.stringify(
+          packet.event === 'unidirectional-received'
+            ? { ...packet, message: undefined, truncated: true }
+            : { type: 'server-error', event: 'response-too-large', bytes: bytes.byteLength },
+        ),
+      );
+    }
+    if (bytes.byteLength > limit)
+      return Promise.reject(new Error('The response exceeds the datagram limit.'));
+    queue.count++;
+    const current = queue.tail
       .catch(() => undefined)
       .then(async () => {
-        const writer = session.datagrams.writable.getWriter();
+        session.signal.throwIfAborted();
+        if (queue.failed) throw new Error('The outgoing datagram queue is closed.');
+        const operation = async () => {
+          const writer = session.datagrams.writable.getWriter();
+          try {
+            await writer.ready;
+            session.signal.throwIfAborted();
+            await writer.write(bytes);
+          } finally {
+            writer.releaseLock();
+          }
+        };
         try {
-          await writer.ready;
-          await writer.write(this.encoder.encode(JSON.stringify(packet)));
-        } finally {
-          writer.releaseLock();
+          await waitForWrite(operation(), session.signal);
+        } catch (error) {
+          queue.failed = true;
+          void Promise.resolve()
+            .then(() =>
+              session.close({ closeCode: 0x101, reason: 'Outgoing datagram write failed' }),
+            )
+            .catch(() => {});
+          throw error;
         }
       });
-    this.pendingDatagramWrites.set(session, current);
-    return current;
+    queue.tail = current;
+    return current.finally(() => {
+      queue.count--;
+    });
   }
+}
+
+function waitForWrite(operation: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const abort = () => finish(signal.reason ?? new Error('Session closed'));
+    const timer = setTimeout(
+      () => finish(new Error('Outgoing datagram write timed out.')),
+      WRITE_TIMEOUT_MS,
+    );
+    signal.addEventListener('abort', abort, { once: true });
+    void operation.then(() => finish(), finish);
+    if (signal.aborted) abort();
+  });
 }
 
 function joinChunks(chunks: readonly Uint8Array[], total: number): Uint8Array {

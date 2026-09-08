@@ -497,6 +497,10 @@ async function readAll(reader) {
   for (;;) {
     const result = await reader.read();
     if (result.done) return joinChunks(chunks, total);
+    if (result.value.byteLength > 1024 * 1024 - total) {
+      await reader.cancel('Demo response exceeds 1 MiB');
+      throw new Error('Demo response exceeds 1 MiB');
+    }
     chunks.push(result.value);
     total += result.value.byteLength;
   }

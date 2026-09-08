@@ -27,6 +27,17 @@ describe('SessionTicketStore', () => {
     now = 111;
     expect(store.consume(`/demo?ticket=${expired}`, '127.0.0.1')).toBe(false);
   });
+
+  it('expires at the exact deadline and reclaims ticket capacity at that boundary', () => {
+    let now = 100;
+    const store = new SessionTicketStore(10, 1, () => now);
+    const first = store.issue('127.0.0.1').ticket;
+    now = 110;
+    expect(store.consume(`/demo?ticket=${first}`, '127.0.0.1')).toBe(false);
+    store.issue('127.0.0.1');
+    now = 120;
+    expect(() => store.issue('127.0.0.1')).not.toThrow();
+  });
 });
 
 describe('bearerTokenMatches', () => {

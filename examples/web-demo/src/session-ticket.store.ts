@@ -5,6 +5,8 @@ interface StoredTicket {
   readonly remoteAddress: string;
 }
 
+export class SessionTicketCapacityError extends Error {}
+
 export class SessionTicketStore {
   private readonly tickets = new Map<string, StoredTicket>();
 
@@ -17,7 +19,7 @@ export class SessionTicketStore {
   issue(remoteAddress: string): { ticket: string; expiresInMs: number } {
     this.removeExpired();
     if (this.tickets.size >= this.maximumTickets) {
-      throw new Error('Too many pending WebTransport session tickets.');
+      throw new SessionTicketCapacityError('Too many pending WebTransport session tickets.');
     }
 
     const ticket = randomBytes(32).toString('base64url');
@@ -53,7 +55,7 @@ export class SessionTicketStore {
 
     this.tickets.delete(key);
     return (
-      stored.expiresAt >= this.now() &&
+      stored.expiresAt > this.now() &&
       constantTimeTextEqual(stored.remoteAddress, normalizeAddress(remoteAddress))
     );
   }
@@ -61,7 +63,7 @@ export class SessionTicketStore {
   private removeExpired(): void {
     const now = this.now();
     for (const [key, ticket] of this.tickets) {
-      if (ticket.expiresAt < now) this.tickets.delete(key);
+      if (ticket.expiresAt <= now) this.tickets.delete(key);
     }
   }
 }

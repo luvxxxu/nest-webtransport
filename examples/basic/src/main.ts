@@ -22,5 +22,5 @@ async function bootstrap(): Promise<void> {
 void bootstrap().catch((error: unknown) => {
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
   bootstrapLogger.error(message);
-  process.exitCode = 1;
+  (globalThis as typeof globalThis & { process: { exitCode: number } }).process.exitCode = 1;
 });
