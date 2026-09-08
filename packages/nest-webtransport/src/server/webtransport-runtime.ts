@@ -36,6 +36,8 @@ import {
 } from '../module/options.js';
 import { WEBTRANSPORT_MODULE_OPTIONS } from '../module/tokens.js';
 import { GatewayRegistry } from '../routing/gateway-registry.js';
+import { HandlerBudget } from './handler-budget.js';
+import type { WebTransportRuntimeStats } from './runtime-stats.js';
 
 const CLOSE_CODE = Object.freeze({
   REJECTED: 0x100,
@@ -65,6 +67,8 @@ interface ManagedSession {
   datagramWindowStartedAt: number;
   datagramsInWindow: number;
   drainingDatagrams: boolean;
+  queuedDatagramBytes: number;
+  lastActivityAt: number;
   finalized: boolean;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   admission: Promise<void> | undefined;
@@ -82,6 +86,19 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly outstandingSessions = new Set<ManagedSession>();
   private readonly ipRecords = new Map<string, IpRecord>();
+  private readonly handlerBudget: HandlerBudget;
+  private queuedDatagramBytes = 0;
+  private activeStreams = 0;
+  private acceptedSessions = 0;
+  private rejectedSessions = 0;
+  private rejectedHandlers = 0;
+  private droppedDatagrams = 0;
+  private suppressedLogs = 0;
+  private logWindowAt = 0;
+  private logsInWindow = 0;
+  private pendingLogCallbacks = 0;
+  private readonly rejections: Record<string, number> = Object.create(null);
+  private readonly drops: Record<string, number> = Object.create(null);
   private unsubscribeFromDriver: (() => void) | undefined;
   private removeServerAbortListener: () => void = () => {};
   private startupController: AbortController | undefined;
@@ -97,7 +114,33 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     private readonly pipeline: WebTransportExecutionPipeline,
     @Inject(ModuleRef)
     private readonly moduleRef: ModuleRef,
-  ) {}
+  ) {
+    this.handlerBudget = new HandlerBudget(
+      options.limits.server.maxConcurrentHandlers,
+      options.limits.server.maxPendingHandlers,
+    );
+  }
+
+  getStats(): WebTransportRuntimeStats {
+    return Object.freeze({
+      sessions: Object.freeze({
+        accepted: this.acceptedSessions,
+        rejected: this.rejectedSessions,
+        rejections: Object.freeze({ ...this.rejections }),
+      }),
+      datagrams: Object.freeze({
+        dropped: this.droppedDatagrams,
+        drops: Object.freeze({ ...this.drops }),
+        queuedBytes: this.queuedDatagramBytes,
+      }),
+      handlers: Object.freeze({
+        active: this.handlerBudget.active,
+        outstanding: this.handlerBudget.outstanding,
+        rejected: this.rejectedHandlers,
+      }),
+      logs: Object.freeze({ suppressed: this.suppressedLogs }),
+    });
+  }
 
   get snapshot(): WebTransportLifecycleSnapshot {
     return this.lifecycle.snapshot;
@@ -283,6 +326,13 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     this.unsubscribeFromDriver = undefined;
 
     for (const managed of this.outstandingSessions) {
+      if (this.options.shutdown.graceful && this.driver.capabilities.gracefulShutdown) {
+        try {
+          managed.session.drain?.();
+        } catch (error) {
+          this.logError('session.drain.failed', error, managed.session.id);
+        }
+      }
       this.stopIntake(managed, 'Server is draining');
     }
 
@@ -368,18 +418,24 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
   }
 
   private async acceptSession(session: WebTransportSession): Promise<void> {
-    if (!this.lifecycle.snapshot.acceptingSessions) {
+    if (
+      !this.lifecycle.snapshot.acceptingSessions ||
+      this.driver.getStats().state !== WebTransportServerState.RUNNING
+    ) {
+      this.recordRejection('server-unavailable');
       await this.closeSession(session, CLOSE_CODE.REJECTED, 'Server is not accepting sessions');
       return;
     }
 
     if (!this.registry.hasPath(session.path)) {
+      this.recordRejection('no-route');
       await this.closeSession(session, CLOSE_CODE.NO_ROUTE, 'No WebTransport gateway for path');
       return;
     }
 
     const rejection = this.validateSession(session);
     if (rejection !== undefined) {
+      this.recordRejection(rejection.code);
       this.log({
         level: 'warn',
         event: 'session.rejected',
@@ -392,7 +448,17 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
 
     const ipAddress = session.remoteAddress ?? '<unknown>';
     if (!this.acquireIpSlot(ipAddress)) {
+      this.recordRejection('ip-limit');
       await this.closeSession(session, CLOSE_CODE.RESOURCE_LIMIT, 'Per-IP session limit exceeded');
+      return;
+    }
+
+    const releaseAdmissionBudget = this.handlerBudget.reserve();
+    if (releaseAdmissionBudget === undefined) {
+      this.releaseIpSlot(ipAddress);
+      this.rejectedHandlers++;
+      this.recordRejection('handler-limit');
+      await this.closeSession(session, CLOSE_CODE.RESOURCE_LIMIT, 'Server work limit exceeded');
       return;
     }
 
@@ -404,7 +470,9 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     try {
       reservedReaders = this.reserveIncomingReaders(session);
     } catch (error) {
+      releaseAdmissionBudget();
       this.releaseIpSlot(ipAddress);
+      this.recordRejection('reader-setup');
       this.logError('session.reader-reservation.failed', error, session.id);
       await this.closeSession(session, CLOSE_CODE.INTERNAL_ERROR, 'Incoming reader setup failed');
       return;
@@ -416,6 +484,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
       metadata: new Map(),
       createdAt: Date.now(),
       signal: AbortSignal.any([session.signal, admissionController.signal]),
+      touch: () => this.touch(managed),
     };
     const contextId = ContextIdFactory.create();
     this.moduleRef.registerRequestByContextId(context, contextId);
@@ -446,6 +515,8 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
       datagramWindowStartedAt: Date.now(),
       datagramsInWindow: 0,
       drainingDatagrams: false,
+      queuedDatagramBytes: 0,
+      lastActivityAt: performance.now(),
       finalized: false,
       idleTimer: undefined,
       admission: undefined,
@@ -458,6 +529,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     managed.removeSessionAbortListener = () =>
       session.signal.removeEventListener('abort', finalize);
     if (session.signal.aborted) {
+      releaseAdmissionBudget();
       this.finalizeSession(managed);
       return;
     }
@@ -466,14 +538,16 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
 
     // A timeout stops admission, not an arbitrary user Promise. Keep the real work
     // charged to the server/IP limits until it settles, including after disconnect.
-    const work = Promise.resolve().then(() => this.authenticateAndRunSessionHandlers(managed));
+    const work = this.handlerBudget
+      .run(() => this.authenticateAndRunSessionHandlers(managed), managed.context.signal)
+      .finally(releaseAdmissionBudget);
     managed.admission = work;
     const releaseAdmission = () => {
       if (managed.admission === work) managed.admission = undefined;
     };
     void work.then(releaseAdmission, releaseAdmission);
     const admission = withTimeout(
-      withAbortSignal(work, admissionController.signal),
+      withAbortSignal(work, managed.context.signal),
       this.options.security.handshakeTimeoutMs,
       'WebTransport session admission timed out.',
       (error) => admissionController.abort(error),
@@ -481,6 +555,9 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     try {
       await admission;
     } catch (error) {
+      this.recordRejection(
+        error instanceof WebTransportTimeoutError ? 'admission-timeout' : 'admission-failed',
+      );
       this.logError('session.rejected', error, session.id);
       await this.closeSession(session, CLOSE_CODE.REJECTED, 'Session rejected');
       return;
@@ -497,6 +574,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
       return;
     }
 
+    this.acceptedSessions++;
     this.log({ level: 'info', event: 'session.accepted', sessionId: session.id });
     if (managed.datagramReader !== undefined) {
       this.startPump(managed, this.pumpDatagrams(managed));
@@ -646,35 +724,39 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
           return;
         }
 
+        if (managed.intakeController.signal.aborted || managed.session.signal.aborted) return;
         this.touch(managed);
         if (value.byteLength > this.maximumDatagramSize(managed.session)) {
-          this.log({
-            level: 'warn',
-            event: 'datagram.dropped',
-            sessionId: managed.session.id,
-            code: 'ERR_WEBTRANSPORT_DATAGRAM_SIZE_LIMIT',
-          });
+          this.recordDatagramDrop('size-limit', managed);
           continue;
         }
         if (!this.consumeDatagramRate(managed)) {
-          this.log({
-            level: 'warn',
-            event: 'datagram.dropped',
-            sessionId: managed.session.id,
-            code: 'ERR_WEBTRANSPORT_DATAGRAM_RATE_LIMIT',
-          });
+          this.recordDatagramDrop('rate-limit', managed);
           continue;
         }
-
-        const result = managed.datagrams.enqueue(value);
-        if (result.outcome !== 'enqueued') {
-          this.log({
-            level: 'warn',
-            event: 'datagram.dropped',
-            sessionId: managed.session.id,
-            code: `DATAGRAM_${result.outcome.toUpperCase().replace('-', '_')}`,
-          });
+        // Charge actual retained bytes, including datagrams waiting in the scheduler.
+        const replacedBytes =
+          managed.datagrams.isFull && managed.datagrams.overflow === 'drop-oldest'
+            ? (managed.datagrams.peek()?.byteLength ?? 0)
+            : 0;
+        if (
+          this.queuedDatagramBytes - replacedBytes + value.byteLength >
+          this.options.limits.server.maxQueuedDatagramBytes
+        ) {
+          this.recordDatagramDrop('server-byte-limit', managed);
+          continue;
         }
+        // Copy once to prevent a tiny view retaining an arbitrarily large backing buffer.
+        const result = managed.datagrams.enqueue(new Uint8Array(value));
+        if (result.accepted) {
+          this.queuedDatagramBytes += value.byteLength;
+          managed.queuedDatagramBytes += value.byteLength;
+        }
+        if (result.outcome === 'dropped-oldest') {
+          this.queuedDatagramBytes -= result.dropped.byteLength;
+          managed.queuedDatagramBytes -= result.dropped.byteLength;
+        }
+        if (result.outcome !== 'enqueued') this.recordDatagramDrop(result.outcome, managed);
         if (result.outcome === 'close-session') {
           await this.closeSession(
             managed.session,
@@ -684,7 +766,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
           return;
         }
 
-        void this.drainDatagrams(managed);
+        if (!managed.drainingDatagrams) this.startPump(managed, this.drainDatagrams(managed));
       }
     } catch (error) {
       if (!managed.session.signal.aborted && !managed.intakeController.signal.aborted) {
@@ -728,12 +810,19 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
         if (datagram === undefined) {
           return;
         }
-        const outcome = managed.scheduler.submit(
+        managed.queuedDatagramBytes -= datagram.byteLength;
+        const outcome = this.submit(
+          managed,
           () => this.dispatchDatagram(managed, datagram),
           async (error) => {
             await this.handleRuntimeError(error, managed);
           },
+          () => {
+            this.queuedDatagramBytes -= datagram.byteLength;
+          },
         );
+        if (outcome !== 'started' && outcome !== 'queued')
+          this.recordDatagramDrop('handler-limit', managed);
         await this.handleSubmissionOutcome(outcome, managed);
       }
     } finally {
@@ -745,11 +834,13 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     const resolution = this.options.routing.datagram
       ? await this.options.routing.datagram(datagram, managed.session, managed.context)
       : ({ value: datagram, payload: datagram } satisfies WebTransportRouteResolution<Uint8Array>);
+    managed.context.signal.throwIfAborted();
     const value = resolution.value ?? datagram;
     const payload = hasOwn(resolution, 'payload') ? resolution.payload : value;
     const handlers = this.registry.find(managed.session.path, 'datagram', resolution.route);
 
     for (const handler of handlers) {
+      managed.context.signal.throwIfAborted();
       const args: WebTransportHandlerArguments = [
         managed.session,
         undefined,
@@ -795,14 +886,22 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
         if (done) {
           return;
         }
+        if (managed.intakeController.signal.aborted || managed.session.signal.aborted) {
+          await value.reset(CLOSE_CODE.REJECTED);
+          return;
+        }
         this.touch(managed);
-        if (managed.bidirectionalStreams >= this.options.limits.session.maxBidirectionalStreams) {
+        if (
+          this.activeStreams >= this.options.limits.server.maxStreams ||
+          managed.bidirectionalStreams >= this.options.limits.session.maxBidirectionalStreams
+        ) {
           await value.reset(CLOSE_CODE.RESOURCE_LIMIT);
           continue;
         }
 
         this.trackStream(managed, value, 'bidirectional');
-        const outcome = managed.scheduler.submit(
+        const outcome = this.submit(
+          managed,
           () => this.dispatchBidirectionalStream(managed, value),
           async (error) => {
             await this.handleRuntimeError(error, managed, value);
@@ -834,6 +933,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
           value: stream,
           payload: stream,
         } satisfies WebTransportRouteResolution<WebTransportBidirectionalStream>);
+    managed.context.signal.throwIfAborted();
     const value = resolution.value ?? stream;
     const payload = hasOwn(resolution, 'payload') ? resolution.payload : value;
     const handlers = this.registry.find(
@@ -852,6 +952,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     }
 
     for (const handler of handlers) {
+      managed.context.signal.throwIfAborted();
       try {
         await this.pipeline.invoke(
           handler,
@@ -894,14 +995,22 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
         if (done) {
           return;
         }
+        if (managed.intakeController.signal.aborted || managed.session.signal.aborted) {
+          await value.stop(CLOSE_CODE.REJECTED);
+          return;
+        }
         this.touch(managed);
-        if (managed.unidirectionalStreams >= this.options.limits.session.maxUnidirectionalStreams) {
+        if (
+          this.activeStreams >= this.options.limits.server.maxStreams ||
+          managed.unidirectionalStreams >= this.options.limits.session.maxUnidirectionalStreams
+        ) {
           await value.stop(CLOSE_CODE.RESOURCE_LIMIT);
           continue;
         }
 
         this.trackStream(managed, value, 'unidirectional');
-        const outcome = managed.scheduler.submit(
+        const outcome = this.submit(
+          managed,
           () => this.dispatchUnidirectionalStream(managed, value),
           async (error) => {
             await this.handleRuntimeError(error, managed, value);
@@ -933,6 +1042,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
           value: stream,
           payload: stream,
         } satisfies WebTransportRouteResolution<WebTransportReceiveStream>);
+    managed.context.signal.throwIfAborted();
     const value = resolution.value ?? stream;
     const payload = hasOwn(resolution, 'payload') ? resolution.payload : value;
     const handlers = this.registry.find(
@@ -951,6 +1061,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     }
 
     for (const handler of handlers) {
+      managed.context.signal.throwIfAborted();
       try {
         await this.pipeline.invoke(
           handler,
@@ -970,6 +1081,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     stream: WebTransportBidirectionalStream | WebTransportReceiveStream,
     kind: 'bidirectional' | 'unidirectional',
   ): void {
+    this.activeStreams++;
     if (kind === 'bidirectional') {
       managed.bidirectionalStreams += 1;
     } else {
@@ -991,6 +1103,9 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
       }
       released = true;
       clearTimeout(timer);
+      this.activeStreams--;
+      stream.signal.removeEventListener('abort', release);
+      managed.session.signal.removeEventListener('abort', release);
       if (kind === 'bidirectional') {
         managed.bidirectionalStreams -= 1;
       } else {
@@ -1006,10 +1121,11 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
         }
       }
     };
-    if (stream.signal.aborted) {
+    if (stream.signal.aborted || managed.session.signal.aborted) {
       release();
     } else {
       stream.signal.addEventListener('abort', release, { once: true });
+      managed.session.signal.addEventListener('abort', release, { once: true });
     }
   }
 
@@ -1159,16 +1275,86 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
   }
 
   private touch(managed: ManagedSession): void {
-    if (managed.idleTimer !== undefined) {
-      clearTimeout(managed.idleTimer);
-    }
-    managed.idleTimer = setTimeout(() => {
+    if (
+      managed.finalized ||
+      managed.session.signal.aborted ||
+      this.options.security.idleTimeoutMs === 0
+    )
+      return;
+    managed.lastActivityAt = performance.now();
+    if (managed.idleTimer !== undefined) return;
+    const checkIdle = () => {
+      managed.idleTimer = undefined;
+      if (managed.finalized || managed.intakeController.signal.aborted) return;
       if (managed.bidirectionalStreams > 0 || managed.unidirectionalStreams > 0) {
         this.touch(managed);
         return;
       }
-      void this.closeSession(managed.session, CLOSE_CODE.TIMEOUT, 'Session idle timeout');
-    }, this.options.security.idleTimeoutMs);
+      const remaining =
+        this.options.security.idleTimeoutMs - (performance.now() - managed.lastActivityAt);
+      if (remaining > 0) {
+        managed.idleTimer = setTimeout(checkIdle, remaining);
+      } else {
+        void this.closeSession(managed.session, CLOSE_CODE.TIMEOUT, 'Session idle timeout');
+      }
+    };
+    managed.idleTimer = setTimeout(checkIdle, this.options.security.idleTimeoutMs);
+  }
+
+  private submit(
+    managed: ManagedSession,
+    task: () => Promise<void>,
+    onError: (error: unknown) => Promise<void>,
+    onSettled: () => void = () => {},
+  ): TaskSubmissionResult {
+    const release = this.handlerBudget.reserve();
+    if (release === undefined) {
+      onSettled();
+      this.rejectedHandlers++;
+      return this.options.execution.overflow === 'drop'
+        ? 'dropped'
+        : this.options.execution.overflow === 'reject'
+          ? 'rejected'
+          : 'close-session';
+    }
+    const settle = () => {
+      release();
+      onSettled();
+    };
+    const outcome = managed.scheduler.submit(
+      () => this.handlerBudget.run(task, managed.context.signal),
+      async (error) => {
+        if (!managed.context.signal.aborted) await onError(error);
+      },
+      settle,
+    );
+    if (outcome !== 'started' && outcome !== 'queued') {
+      this.rejectedHandlers++;
+      settle();
+    }
+    return outcome;
+  }
+
+  private recordRejection(reason: string): void {
+    this.rejectedSessions++;
+    this.rejections[reason] = (this.rejections[reason] ?? 0) + 1;
+  }
+
+  private recordDatagramDrop(reason: string, managed: ManagedSession): void {
+    this.droppedDatagrams++;
+    this.drops[reason] = (this.drops[reason] ?? 0) + 1;
+    this.log({
+      level: 'warn',
+      event: 'datagram.dropped',
+      sessionId: managed.session.id,
+      code: reason,
+    });
+  }
+
+  private clearDatagrams(managed: ManagedSession): void {
+    this.queuedDatagramBytes -= managed.queuedDatagramBytes;
+    managed.queuedDatagramBytes = 0;
+    managed.datagrams.clear();
   }
 
   private startPump(managed: ManagedSession, pump: Promise<void>): void {
@@ -1210,7 +1396,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     this.stopIntake(managed, managed.session.signal.reason);
     managed.admissionController.abort(managed.session.signal.reason ?? 'Session finalized');
     managed.scheduler.close({ discardPending: true });
-    managed.datagrams.clear();
+    this.clearDatagrams(managed);
     for (const resolve of managed.streamIdleWaiters) {
       resolve();
     }
@@ -1236,7 +1422,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
       managed.intakeController.abort(reason);
     }
     managed.scheduler.close();
-    managed.datagrams.clear();
+    this.clearDatagrams(managed);
     const datagramReader = managed.datagramReader;
     managed.datagramReader = undefined;
     const bidirectionalReader = managed.bidirectionalReader;
@@ -1254,7 +1440,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     reason: string,
   ): Promise<void> {
     await withTimeout(
-      session.close({ closeCode, reason }),
+      Promise.resolve().then(() => session.close({ closeCode, reason })),
       this.options.shutdown.forceCloseTimeoutMs,
       'Timed out while closing a WebTransport session.',
     ).catch((error) => this.logError('session.close.failed', error, session.id));
@@ -1264,11 +1450,49 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
     return this.lifecycle.state;
   }
 
-  private log(record: Omit<WebTransportLogRecord, 'timestamp'>): void {
+  private log(record: Omit<WebTransportLogRecord, 'timestamp'>, error?: unknown): void {
+    const now = performance.now();
+    if (now - this.logWindowAt >= 1_000) {
+      this.logWindowAt = now;
+      this.logsInWindow = 0;
+    }
+    if (
+      this.logsInWindow >= this.options.observability.maxLogsPerSecond ||
+      this.pendingLogCallbacks >= this.options.observability.maxLogsPerSecond
+    ) {
+      this.suppressedLogs++;
+      return;
+    }
+    this.logsInWindow++;
+    const entry = { ...record, timestamp: Date.now() };
+    const pending: Promise<void>[] = [];
+    const observe = (value: unknown) => {
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        'then' in value &&
+        typeof value.then === 'function'
+      ) {
+        pending.push(Promise.resolve(value as PromiseLike<void>));
+      }
+    };
     try {
-      this.options.logger({ ...record, timestamp: Date.now() });
+      if (error !== undefined) {
+        observe(this.options.observability.onError?.(error, entry));
+      }
+    } catch {
+      /* Diagnostics must not affect transport behavior. */
+    }
+    try {
+      observe(this.options.logger(entry));
     } catch {
       // Observability must never affect transport availability or isolation.
+    }
+    if (pending.length > 0) {
+      this.pendingLogCallbacks++;
+      void Promise.allSettled(pending).then(() => {
+        this.pendingLogCallbacks--;
+      });
     }
   }
 
@@ -1283,7 +1507,7 @@ export class WebTransportRuntime implements OnApplicationBootstrap, OnApplicatio
         errorName: error instanceof Error ? error.name : 'UnknownError',
       },
     };
-    this.log(record);
+    this.log(record, error);
   }
 }
 
@@ -1334,7 +1558,10 @@ function withAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
   }
 
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason);
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason);
+    };
     signal.addEventListener('abort', abort, { once: true });
     void promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });

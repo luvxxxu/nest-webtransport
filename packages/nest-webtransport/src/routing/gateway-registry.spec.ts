@@ -41,4 +41,13 @@ describe('GatewayRegistry', () => {
     expect(registry.hasPath('/chat')).toBe(false);
     expect(registry.hasHandlers('/chat', 'session')).toBe(false);
   });
+
+  it('runs the unnamed fallback only once when a resolver returns an empty route', () => {
+    const registry = new GatewayRegistry();
+    const fallback = { ...sharedHandler, kind: 'datagram', route: undefined } as const;
+    registry.register(fallback);
+    registry.register({ ...sharedHandler, kind: 'datagram', route: 'typing' });
+
+    expect(registry.find('/chat', 'datagram', '')).toEqual([fallback]);
+  });
 });

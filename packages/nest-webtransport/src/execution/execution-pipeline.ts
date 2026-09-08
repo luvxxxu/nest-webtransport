@@ -17,6 +17,10 @@ import {
   PIPES_METADATA,
 } from '@nestjs/common/constants';
 import { ApplicationConfig, type ContextId, ModuleRef } from '@nestjs/core';
+import {
+  InvalidClassScopeException,
+  UnknownElementException,
+} from '@nestjs/core/errors/exceptions/index.js';
 import type { InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 import { defer, from, isObservable, lastValueFrom, type Observable, of } from 'rxjs';
 import { mergeMap } from 'rxjs/operators';
@@ -32,7 +36,7 @@ type Enhancer<T> = T | EnhancerClass<T>;
 
 @Injectable()
 export class WebTransportExecutionPipeline {
-  private readonly createdEnhancers = new Map<object, Promise<unknown>>();
+  private readonly createdEnhancers = new WeakMap<ModuleRef, Map<object, Promise<unknown>>>();
 
   constructor(
     @Inject(ModuleRef)
@@ -46,7 +50,10 @@ export class WebTransportExecutionPipeline {
     transportArguments: WebTransportHandlerArguments,
     contextId?: ContextId,
   ): Promise<unknown> {
+    const signal = transportArguments[4].signal;
+    signal.throwIfAborted();
     const instance = await this.resolveGateway(handler, contextId);
+    signal.throwIfAborted();
     const callback = Reflect.get(instance, handler.methodName) as unknown;
     if (typeof callback !== 'function') {
       throw new TypeError(
@@ -73,14 +80,20 @@ export class WebTransportExecutionPipeline {
           ...readEnhancers<NestInterceptor>(INTERCEPTORS_METADATA, handler.callback),
         ],
         contextId,
+        handler.moduleRef,
+        handler.providerHost,
       );
 
+      signal.throwIfAborted();
       const result = this.runInterceptors(interceptors, context, async () => {
+        signal.throwIfAborted();
         const args = await this.createArguments(handler, transportArguments, contextId);
+        signal.throwIfAborted();
         return callback.apply(instance, args);
       });
       return await lastValueFrom(result);
     } catch (error) {
+      if (signal.aborted) throw error;
       return this.handleException(error, handler, context, contextId);
     }
   }
@@ -102,11 +115,16 @@ export class WebTransportExecutionPipeline {
         ...readEnhancers<CanActivate>(GUARDS_METADATA, handler.callback),
       ],
       contextId,
+      handler.moduleRef,
+      handler.providerHost,
     );
 
     for (const guard of guards) {
+      const signal = context.switchToWebTransport().getSessionContext().signal;
+      signal.throwIfAborted();
       const decision = guard.canActivate(context);
       const allowed = isObservable(decision) ? await lastValueFrom(decision) : await decision;
+      signal.throwIfAborted();
       if (!allowed) {
         throw new ForbiddenException('WebTransport session or event was rejected by a guard.');
       }
@@ -135,6 +153,8 @@ export class WebTransportExecutionPipeline {
         ...readEnhancers<PipeTransform>(PIPES_METADATA, handler.callback),
       ],
       contextId,
+      handler.moduleRef,
+      handler.providerHost,
     );
 
     await Promise.all(
@@ -142,6 +162,8 @@ export class WebTransportExecutionPipeline {
         const parameterPipes = await this.resolveEnhancers<PipeTransform>(
           parameter.pipes,
           contextId,
+          handler.moduleRef,
+          handler.providerHost,
         );
         let value = extractParameter(parameter.kind, transportArguments);
         const metadata: ArgumentMetadata = {
@@ -151,6 +173,7 @@ export class WebTransportExecutionPipeline {
         };
 
         for (const pipe of [...sharedPipes, ...parameterPipes]) {
+          transportArguments[4].signal.throwIfAborted();
           value = await pipe.transform(value, metadata);
         }
         args[parameter.index] = value;
@@ -166,6 +189,7 @@ export class WebTransportExecutionPipeline {
     invokeHandler: () => unknown,
   ): Observable<unknown> {
     const dispatch = (index: number): Observable<unknown> => {
+      context.switchToWebTransport().getSessionContext().signal.throwIfAborted();
       const interceptor = interceptors[index];
       if (interceptor === undefined) {
         return toObservable(invokeHandler);
@@ -199,6 +223,8 @@ export class WebTransportExecutionPipeline {
         ...readEnhancers<ExceptionFilter>(EXCEPTION_FILTERS_METADATA, handler.callback),
       ].reverse(),
       contextId,
+      handler.moduleRef,
+      handler.providerHost,
     );
 
     for (const filter of filters) {
@@ -220,30 +246,54 @@ export class WebTransportExecutionPipeline {
   private async resolveEnhancers<T>(
     enhancers: readonly Enhancer<T>[],
     contextId?: ContextId,
+    owner?: ModuleRef,
+    host?: InstanceWrapper['host'],
   ): Promise<T[]> {
-    return Promise.all(enhancers.map((enhancer) => this.resolveEnhancer(enhancer, contextId)));
+    return Promise.all(
+      enhancers.map((enhancer) => this.resolveEnhancer(enhancer, contextId, owner, host)),
+    );
   }
 
-  private async resolveEnhancer<T>(enhancer: Enhancer<T>, contextId?: ContextId): Promise<T> {
+  private async resolveEnhancer<T>(
+    enhancer: Enhancer<T>,
+    contextId?: ContextId,
+    owner?: ModuleRef,
+    host?: InstanceWrapper['host'],
+  ): Promise<T> {
     if (typeof enhancer !== 'function') {
       return enhancer;
     }
     const enhancerType = enhancer as Type<T>;
+    const providerHost =
+      host === undefined ? undefined : findVisibleProviderHost(host, enhancerType);
+    const providerRef = providerHost?.providers.get(ModuleRef)?.instance as ModuleRef | undefined;
+    const moduleRef = providerRef ?? owner ?? this.moduleRef;
+    const strict = owner !== undefined;
 
     try {
-      return this.moduleRef.get(enhancerType, { strict: false });
-    } catch {
-      if (contextId !== undefined) {
-        try {
-          return await this.moduleRef.resolve(enhancerType, contextId, { strict: false });
-        } catch {
-          return this.moduleRef.create(enhancerType, contextId);
-        }
+      return moduleRef.get(enhancerType, { strict });
+    } catch (error) {
+      if (error instanceof InvalidClassScopeException) {
+        // A registered provider must retain its factory, scope and failures.
+        // Recreating the metatype here could bypass a failed authorization DI
+        // factory by silently substituting a different instance.
+        return moduleRef.resolve(enhancerType, contextId, { strict });
       }
-      let pending = this.createdEnhancers.get(enhancerType);
+      if (!(error instanceof UnknownElementException)) {
+        throw error;
+      }
+      if (contextId !== undefined) {
+        return moduleRef.create(enhancerType, contextId);
+      }
+      let created = this.createdEnhancers.get(moduleRef);
+      if (created === undefined) {
+        created = new Map();
+        this.createdEnhancers.set(moduleRef, created);
+      }
+      let pending = created.get(enhancerType);
       if (pending === undefined) {
-        pending = this.moduleRef.create(enhancerType as Type<unknown>);
-        this.createdEnhancers.set(enhancerType, pending);
+        pending = moduleRef.create(enhancerType as Type<unknown>);
+        created.set(enhancerType, pending);
       }
       return (await pending) as T;
     }
@@ -259,14 +309,12 @@ export class WebTransportExecutionPipeline {
 
     return Promise.all(
       wrappers.map(async (wrapper) => {
-        if (wrapper.metatype !== undefined && wrapper.metatype !== null) {
-          return this.moduleRef.resolve(wrapper.metatype as Type<T>, contextId, { strict: false });
-        }
-        const host = wrapper.getInstanceByContextId(contextId);
-        if (host.instance !== undefined) {
-          return host.instance;
-        }
-        throw new TypeError('Unable to resolve a request-scoped global WebTransport enhancer.');
+        // APP_* registrations use generated provider tokens. Their metatype may
+        // be a factory or an alias and is not the registered injection token.
+        const owner = wrapper.host?.providers.get(ModuleRef)?.instance as ModuleRef | undefined;
+        return (owner ?? this.moduleRef).resolve<T>(wrapper.token, contextId, {
+          strict: owner !== undefined,
+        });
       }),
     );
   }
@@ -279,8 +327,38 @@ export class WebTransportExecutionPipeline {
       return handler.instance;
     }
 
-    return this.moduleRef.resolve(handler.metatype, contextId, { strict: false });
+    return (handler.moduleRef ?? this.moduleRef).resolve(
+      handler.providerToken ?? handler.metatype,
+      contextId,
+      { strict: handler.moduleRef !== undefined },
+    );
   }
+}
+
+function findVisibleProviderHost(
+  host: NonNullable<InstanceWrapper['host']>,
+  token: Type<unknown>,
+): InstanceWrapper['host'] {
+  if (host.providers.has(token) || host.injectables.has(token)) return host;
+  const visited = new Set<NonNullable<InstanceWrapper['host']>>();
+  const findExported = (
+    candidate: NonNullable<InstanceWrapper['host']>,
+  ): InstanceWrapper['host'] => {
+    if (visited.has(candidate)) return undefined;
+    visited.add(candidate);
+    if (candidate.exports.has(token) && candidate.providers.has(token)) return candidate;
+    for (const imported of candidate.imports) {
+      if (!candidate.exports.has(imported.metatype)) continue;
+      const found = findExported(imported);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  for (const imported of host.imports) {
+    const found = findExported(imported);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 function readEnhancers<T>(metadataKey: string, target: object): readonly Enhancer<T>[] {

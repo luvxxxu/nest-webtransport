@@ -1,5 +1,7 @@
-import type { Type } from '@nestjs/common';
+import type { InjectionToken, Type } from '@nestjs/common';
 import { Injectable } from '@nestjs/common';
+import type { ModuleRef } from '@nestjs/core';
+import type { InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 
 import type { WebTransportHandlerKind, WebTransportParameterMetadata } from '../metadata/types.js';
 
@@ -13,6 +15,9 @@ export interface CompiledWebTransportHandler {
   readonly callback: (...args: readonly unknown[]) => unknown;
   readonly parameters: readonly WebTransportParameterMetadata[];
   readonly parameterTypes: readonly unknown[];
+  readonly providerToken?: InjectionToken;
+  readonly moduleRef?: ModuleRef;
+  readonly providerHost?: InstanceWrapper['host'];
 }
 
 @Injectable()
@@ -48,7 +53,9 @@ export class GatewayRegistry {
   ): readonly CompiledWebTransportHandler[] {
     const normalizedPath = normalizeGatewayPath(path);
     const exact =
-      route === undefined ? undefined : this.handlers.get(registryKey(normalizedPath, kind, route));
+      route === undefined || route === ''
+        ? undefined
+        : this.handlers.get(registryKey(normalizedPath, kind, route));
     const fallback = this.handlers.get(registryKey(normalizedPath, kind, undefined));
 
     if (exact === undefined) {

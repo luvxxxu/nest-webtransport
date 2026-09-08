@@ -32,3 +32,12 @@ Full examples and API guidance:
 - [Virtual testing](https://github.com/luvxxxu/nest-webtransport/blob/main/docs/testing.md)
 
 MIT license.
+
+
+v1 adds server-wide work, incoming-stream and queued-datagram-byte limits under `limits.server`.
+The default session ceiling is 1,000; workload qualification is required before increasing it.
+Inspect `WebTransportHealthService.getRuntimeStats()` for application-level rejections/drops and
+work occupancy, alongside `getDriverStats()` for transport counters. Runtime logs default to
+100 records/second; configure `observability.maxLogsPerSecond` and an optional private `onError` callback.
+For manual or outgoing I/O, refresh idle activity with `context.touch?.()` after successful progress,
+or set `security.idleTimeoutMs: 0` and implement application-owned idle cleanup.

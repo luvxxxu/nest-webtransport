@@ -1,5 +1,12 @@
-import { Inject, Injectable, type OnModuleInit, type Type } from '@nestjs/common';
-import { DiscoveryService, MetadataScanner } from '@nestjs/core';
+import {
+  Inject,
+  Injectable,
+  type InjectionToken,
+  type OnModuleInit,
+  type Type,
+} from '@nestjs/common';
+import { DiscoveryService, MetadataScanner, ModuleRef } from '@nestjs/core';
+import type { InstanceWrapper } from '@nestjs/core/injector/instance-wrapper.js';
 
 import {
   WEBTRANSPORT_GATEWAY_METADATA,
@@ -16,6 +23,8 @@ import { GatewayRegistry } from '../routing/gateway-registry.js';
 interface DiscoverableWrapper {
   readonly instance?: object | null;
   readonly metatype?: Type<unknown> | null;
+  readonly token?: InjectionToken;
+  readonly host?: InstanceWrapper['host'];
 }
 
 @Injectable()
@@ -59,6 +68,7 @@ export class GatewayExplorer implements OnModuleInit {
     if (discoveryTarget === null) {
       return;
     }
+    const moduleRef = wrapper.host?.providers.get(ModuleRef)?.instance as ModuleRef | undefined;
     for (const methodName of this.metadataScanner.getAllMethodNames(prototype)) {
       const callback = Reflect.get(discoveryTarget, methodName) as unknown;
       if (typeof callback !== 'function') {
@@ -104,6 +114,9 @@ export class GatewayExplorer implements OnModuleInit {
         callback: callback as (...args: readonly unknown[]) => unknown,
         parameters,
         parameterTypes,
+        ...(wrapper.token === undefined ? {} : { providerToken: wrapper.token }),
+        ...(moduleRef === undefined ? {} : { moduleRef }),
+        ...(wrapper.host === undefined ? {} : { providerHost: wrapper.host }),
       });
     }
   }

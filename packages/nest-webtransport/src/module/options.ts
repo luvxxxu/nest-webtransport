@@ -5,7 +5,14 @@ import type { WebTransportModuleOptions } from '../interfaces/module-options.int
 export interface NormalizedWebTransportModuleOptions
   extends Omit<
     WebTransportModuleOptions,
-    'security' | 'limits' | 'execution' | 'datagrams' | 'routing' | 'shutdown' | 'logger'
+    | 'security'
+    | 'limits'
+    | 'execution'
+    | 'datagrams'
+    | 'routing'
+    | 'shutdown'
+    | 'logger'
+    | 'observability'
   > {
   readonly security: {
     readonly allowedOrigins: ReadonlySet<string>;
@@ -37,10 +44,20 @@ export interface NormalizedWebTransportModuleOptions
     readonly forceCloseTimeoutMs: number;
   };
   readonly logger: NonNullable<WebTransportModuleOptions['logger']>;
+  readonly observability: {
+    readonly maxLogsPerSecond: number;
+    readonly onError: NonNullable<WebTransportModuleOptions['observability']>['onError'];
+  };
 }
 
 const DEFAULT_LIMITS: WebTransportResourceLimits = Object.freeze({
-  server: Object.freeze({ maxSessions: 50_000 }),
+  server: Object.freeze({
+    maxSessions: 1_000,
+    maxConcurrentHandlers: 256,
+    maxPendingHandlers: 1_024,
+    maxQueuedDatagramBytes: 16 * 1024 * 1024,
+    maxStreams: 2_048,
+  }),
   ip: Object.freeze({ maxSessions: 100, sessionsPerSecond: 10 }),
   session: Object.freeze({
     maxBidirectionalStreams: 100,
@@ -123,7 +140,9 @@ export function normalizeWebTransportModuleOptions(
   assertPositiveSafeInteger(maxHeaderSize, 'security.maxHeaderSize');
   assertPositiveSafeInteger(maxDatagramSize, 'security.maxDatagramSize');
   assertPositiveSafeInteger(handshakeTimeoutMs, 'security.handshakeTimeoutMs');
-  assertPositiveSafeInteger(idleTimeoutMs, 'security.idleTimeoutMs');
+  assertNonNegativeSafeInteger(idleTimeoutMs, 'security.idleTimeoutMs');
+  const maxLogsPerSecond = options.observability?.maxLogsPerSecond ?? 100;
+  assertPositiveSafeInteger(maxLogsPerSecond, 'observability.maxLogsPerSecond');
   assertNonNegativeSafeInteger(drainTimeoutMs, 'shutdown.drainTimeoutMs');
   assertPositiveSafeInteger(forceCloseTimeoutMs, 'shutdown.forceCloseTimeoutMs');
   for (const [name, value] of Object.entries({
@@ -178,6 +197,7 @@ export function normalizeWebTransportModuleOptions(
       forceCloseTimeoutMs,
     }),
     logger: options.logger ?? (() => undefined),
+    observability: Object.freeze({ maxLogsPerSecond, onError: options.observability?.onError }),
   });
 }
 
@@ -210,6 +230,23 @@ export function normalizeWebTransportOrigin(origin: string, label = 'origin'): s
 
 function validatePositiveLimits(limits: WebTransportResourceLimits): void {
   assertPositiveSafeInteger(limits.server.maxSessions, 'limits.server.maxSessions');
+  assertPositiveSafeInteger(
+    limits.server.maxConcurrentHandlers,
+    'limits.server.maxConcurrentHandlers',
+  );
+  assertNonNegativeSafeInteger(
+    limits.server.maxPendingHandlers,
+    'limits.server.maxPendingHandlers',
+  );
+  assertPositiveSafeInteger(
+    limits.server.maxQueuedDatagramBytes,
+    'limits.server.maxQueuedDatagramBytes',
+  );
+  assertPositiveSafeInteger(limits.server.maxStreams, 'limits.server.maxStreams');
+  assertPositiveSafeInteger(
+    limits.server.maxConcurrentHandlers + limits.server.maxPendingHandlers,
+    'limits.server handler capacity',
+  );
   assertPositiveSafeInteger(limits.ip.maxSessions, 'limits.ip.maxSessions');
   assertPositiveSafeInteger(limits.ip.sessionsPerSecond, 'limits.ip.sessionsPerSecond');
   assertPositiveSafeInteger(

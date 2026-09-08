@@ -106,3 +106,30 @@ it.each([
     normalizeWebTransportModuleOptions({ driver, server: { port: 0 }, ...options }),
   ).toThrow(RangeError);
 });
+
+it.each([
+  { maxConcurrentHandlers: 0 },
+  { maxPendingHandlers: -1 },
+  { maxQueuedDatagramBytes: 0 },
+  { maxStreams: 0 },
+  { maxConcurrentHandlers: Number.MAX_SAFE_INTEGER, maxPendingHandlers: 1 },
+])('rejects invalid aggregate limits %#', (server) => {
+  expect(() =>
+    normalizeWebTransportModuleOptions({
+      driver,
+      server: { port: 0 },
+      security: { requireOrigin: false },
+      limits: { server },
+    }),
+  ).toThrow(RangeError);
+});
+
+it('supports explicitly disabling the framework idle deadline', () => {
+  expect(
+    normalizeWebTransportModuleOptions({
+      driver,
+      server: { port: 0 },
+      security: { requireOrigin: false, idleTimeoutMs: 0 },
+    }).security.idleTimeoutMs,
+  ).toBe(0);
+});

@@ -4,7 +4,7 @@ import {
   type WebTransportLifecycleSnapshot,
   WebTransportServerState,
 } from 'webtransport-core';
-
+import type { WebTransportRuntimeStats } from './runtime-stats.js';
 import { WebTransportRuntime } from './webtransport-runtime.js';
 
 export interface WebTransportHealthStatus {
@@ -29,7 +29,7 @@ export class WebTransportHealthService {
         lifecycle.alive &&
         !(
           lifecycle.state === WebTransportServerState.RUNNING &&
-          driverState === WebTransportServerState.STOPPED
+          driverState !== WebTransportServerState.RUNNING
         ),
       ready: lifecycle.ready && driverState === WebTransportServerState.RUNNING,
       lifecycle,
@@ -39,5 +39,9 @@ export class WebTransportHealthService {
 
   getDriverStats(): WebTransportDriverStats {
     return this.runtime.driver.getStats();
+  }
+
+  getRuntimeStats(): WebTransportRuntimeStats {
+    return this.runtime.getStats();
   }
 }

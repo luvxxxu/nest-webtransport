@@ -6,6 +6,13 @@ export type HandlerOverflowPolicy = 'drop' | 'reject' | 'close-session';
 
 export interface WebTransportServerLimits {
   readonly maxSessions: number;
+  /** Aggregate execution limits across all sessions, including admission. */
+  readonly maxConcurrentHandlers: number;
+  readonly maxPendingHandlers: number;
+  /** Bytes retained in framework datagram queues, including scheduled work. */
+  readonly maxQueuedDatagramBytes: number;
+  /** Active decorator-managed incoming streams across all sessions. */
+  readonly maxStreams: number;
 }
 
 export interface WebTransportIpLimits {

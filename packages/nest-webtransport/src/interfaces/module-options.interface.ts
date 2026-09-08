@@ -19,6 +19,7 @@ export interface WebTransportSecurityOptions {
   readonly maxHeaderSize?: number;
   readonly maxDatagramSize?: number;
   readonly handshakeTimeoutMs?: number;
+  /** Zero disables the framework idle timer. Manual I/O can call context.touch(). */
   readonly idleTimeoutMs?: number;
   readonly authenticate?: WebTransportSessionAuthenticator;
 }
@@ -87,7 +88,15 @@ export interface WebTransportLogRecord {
   readonly detail?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
+/** Return values are ignored; asynchronous rejections are isolated. */
 export type WebTransportLogger = (record: WebTransportLogRecord) => void;
+
+export interface WebTransportObservabilityOptions {
+  /** Process-local log budget per runtime; excess records increment suppressed. */
+  readonly maxLogsPerSecond?: number;
+  /** Opt-in private diagnostics. Redact secrets before exporting errors. Rate limited with logs. */
+  readonly onError?: (error: unknown, record: WebTransportLogRecord) => void | Promise<void>;
+}
 
 export interface WebTransportResourceLimitOverrides {
   readonly server?: Partial<WebTransportResourceLimits['server']>;
@@ -106,6 +115,7 @@ export interface WebTransportModuleOptions {
   readonly routing?: WebTransportRoutingOptions;
   readonly shutdown?: WebTransportShutdownOptions;
   readonly logger?: WebTransportLogger;
+  readonly observability?: WebTransportObservabilityOptions;
 }
 
 export interface WebTransportModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {

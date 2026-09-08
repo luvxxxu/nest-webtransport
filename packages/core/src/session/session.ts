@@ -30,5 +30,7 @@ export interface WebTransportSession {
   createBidirectionalStream(): Promise<WebTransportBidirectionalStream>;
   createUnidirectionalStream(): Promise<WebTransportSendStream>;
   close(options?: SessionCloseOptions): Promise<void>;
+  /** Notify the peer to migrate before intake is stopped, without closing active streams. */
+  drain?(): void;
   exportKeyingMaterial?(options: KeyingMaterialExportOptions): Promise<Uint8Array>;
 }

@@ -43,6 +43,7 @@ export type {
   WebTransportLogRecord,
   WebTransportModuleAsyncOptions,
   WebTransportModuleOptions,
+  WebTransportObservabilityOptions,
   WebTransportResourceLimitOverrides,
   WebTransportRouteResolution,
   WebTransportRoutingOptions,
@@ -52,6 +53,7 @@ export type {
   WebTransportUnidirectionalStreamRouteResolver,
 } from './interfaces/module-options.interface.js';
 export { WEBTRANSPORT_DRIVER } from './module/tokens.js';
+export type { WebTransportRuntimeStats } from './server/runtime-stats.js';
 export {
   WebTransportHealthService,
   type WebTransportHealthStatus,

@@ -13,6 +13,7 @@ export type TaskSubmissionResult =
 interface PendingTask {
   readonly task: ScheduledTask;
   readonly onError: (error: unknown) => void | Promise<void>;
+  readonly onSettled?: (() => void) | undefined;
 }
 
 export class BoundedTaskScheduler {
@@ -59,18 +60,19 @@ export class BoundedTaskScheduler {
   submit(
     task: ScheduledTask,
     onError: (error: unknown) => void | Promise<void>,
+    onSettled?: () => void,
   ): TaskSubmissionResult {
     if (!this.accepting) {
       return 'closed';
     }
 
     if (this.activeCount < this.maxConcurrent) {
-      this.start({ task, onError });
+      this.start({ task, onError, onSettled });
       return 'started';
     }
 
     if (this.pending.length < this.maxPending) {
-      this.pending.push({ task, onError });
+      this.pending.push({ task, onError, onSettled });
       return 'queued';
     }
 
@@ -87,7 +89,10 @@ export class BoundedTaskScheduler {
   close(options: { readonly discardPending?: boolean } = {}): void {
     this.accepting = false;
     if (options.discardPending === true) {
-      this.pending.length = 0;
+      const discarded = this.pending.splice(0);
+      for (const pendingTask of discarded) {
+        this.settle(pendingTask);
+      }
     }
     this.flushWaiters();
   }
@@ -147,12 +152,21 @@ export class BoundedTaskScheduler {
       })
       .finally(() => {
         this.activeCount -= 1;
+        this.settle(pendingTask);
         const next = this.pending.shift();
         if (next !== undefined) {
           this.start(next);
         }
         this.flushWaiters();
       });
+  }
+
+  private settle(pendingTask: PendingTask): void {
+    try {
+      pendingTask.onSettled?.();
+    } catch {
+      // A cleanup observer must not prevent other tasks or waiters from settling.
+    }
   }
 
   private flushWaiters(): void {

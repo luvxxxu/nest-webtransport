@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { BoundedTaskScheduler } from './bounded-task-scheduler.js';
 
@@ -16,6 +16,63 @@ function deferred(): Deferred {
 }
 
 describe('BoundedTaskScheduler', () => {
+  it('settles accepted work exactly once and releases discarded queue reservations', async () => {
+    const scheduler = new BoundedTaskScheduler({
+      maxConcurrent: 1,
+      maxPending: 1,
+      overflow: 'drop',
+    });
+    const active = deferred();
+    const activeSettled = vi.fn();
+    const discardedSettled = vi.fn();
+    const unacceptedSettled = vi.fn();
+    const discardedTask = vi.fn();
+
+    expect(scheduler.submit(() => active.promise, vi.fn(), activeSettled)).toBe('started');
+    expect(scheduler.submit(discardedTask, vi.fn(), discardedSettled)).toBe('queued');
+    expect(scheduler.submit(vi.fn(), vi.fn(), unacceptedSettled)).toBe('dropped');
+    scheduler.close({ discardPending: true });
+    scheduler.close({ discardPending: true });
+    expect(discardedSettled).toHaveBeenCalledTimes(1);
+    expect(activeSettled).not.toHaveBeenCalled();
+    expect(scheduler.submit(vi.fn(), vi.fn(), unacceptedSettled)).toBe('closed');
+
+    active.resolve();
+    await scheduler.onIdle();
+    expect(activeSettled).toHaveBeenCalledTimes(1);
+    expect(discardedTask).not.toHaveBeenCalled();
+    expect(unacceptedSettled).not.toHaveBeenCalled();
+  });
+
+  it('awaits the error observer and tolerates a failing settlement observer', async () => {
+    const scheduler = new BoundedTaskScheduler({
+      maxConcurrent: 1,
+      maxPending: 1,
+      overflow: 'drop',
+    });
+    const observation = deferred();
+    const settled = vi.fn(() => {
+      throw new Error('observer failure');
+    });
+    const next = vi.fn();
+    scheduler.submit(
+      () => {
+        throw new Error('task failure');
+      },
+      () => observation.promise,
+      settled,
+    );
+    scheduler.submit(next, vi.fn());
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+
+    observation.resolve();
+    await scheduler.onIdle();
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
   it('never exceeds the active and pending hard limits', async () => {
     const scheduler = new BoundedTaskScheduler({
       maxConcurrent: 1,

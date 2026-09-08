@@ -159,17 +159,20 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   }
 }
 
-it('reports failed liveness when a running runtime loses its driver', async () => {
-  const driver = new DeferredStartDriver();
-  const module = await createRuntimeModule(driver);
-  const runtime = module.get(WebTransportRuntime);
-  const starting = runtime.onApplicationBootstrap();
-  driver.starts[0]?.resolve();
-  await starting;
-  driver.state = 'STOPPED';
-  expect(module.get(WebTransportHealthService).getStatus()).toMatchObject({
-    alive: false,
-    ready: false,
-  });
-  await module.close();
-});
+it.each(['STARTING', 'DRAINING', 'STOPPING', 'STOPPED'] as const)(
+  'reports failed liveness when a running runtime has a %s driver',
+  async (state) => {
+    const driver = new DeferredStartDriver();
+    const module = await createRuntimeModule(driver);
+    const runtime = module.get(WebTransportRuntime);
+    const starting = runtime.onApplicationBootstrap();
+    driver.starts[0]?.resolve();
+    await starting;
+    driver.state = state;
+    expect(module.get(WebTransportHealthService).getStatus()).toMatchObject({
+      alive: false,
+      ready: false,
+    });
+    await module.close();
+  },
+);
