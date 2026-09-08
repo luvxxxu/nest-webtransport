@@ -84,6 +84,49 @@ export class WebTransportMetrics {
       attributes,
       (stats) => stats.bytes.sent,
     );
+    const runtimeStats = options.runtimeStats;
+    if (runtimeStats !== undefined) {
+      const bindings = [
+        ['webtransport.runtime.sessions.accepted', false, () => runtimeStats().sessions.accepted],
+        ['webtransport.runtime.sessions.rejected', false, () => runtimeStats().sessions.rejected],
+        ['webtransport.runtime.datagrams.dropped', false, () => runtimeStats().datagrams.dropped],
+        [
+          'webtransport.runtime.datagrams.queued_bytes',
+          true,
+          () => runtimeStats().datagrams.queuedBytes,
+        ],
+        ['webtransport.runtime.handlers.active', true, () => runtimeStats().handlers.active],
+        [
+          'webtransport.runtime.handlers.outstanding',
+          true,
+          () => runtimeStats().handlers.outstanding,
+        ],
+        ['webtransport.runtime.handlers.rejected', false, () => runtimeStats().handlers.rejected],
+        ['webtransport.runtime.logs.suppressed', false, () => runtimeStats().logs.suppressed],
+      ] as const;
+      for (const [name, gauge, read] of bindings) {
+        const instrument = gauge
+          ? this.meter.createObservableGauge(name)
+          : this.meter.createObservableCounter(name);
+        this.bindings.push({
+          instrument,
+          callback: (result) => result.observe(read(), attributes),
+        });
+      }
+      for (const [name, read] of [
+        ['webtransport.runtime.sessions.rejections', () => runtimeStats().sessions.rejections],
+        ['webtransport.runtime.datagrams.drops', () => runtimeStats().datagrams.drops],
+      ] as const) {
+        const instrument = this.meter.createObservableCounter(name);
+        this.bindings.push({
+          instrument,
+          callback: (result) => {
+            for (const [reason, value] of Object.entries(read()))
+              result.observe(value, { ...attributes, reason });
+          },
+        });
+      }
+    }
   }
 
   enable(): void {

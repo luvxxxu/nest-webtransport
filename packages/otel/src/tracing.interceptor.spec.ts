@@ -1,6 +1,6 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { type Attributes, context as activeContext } from '@opentelemetry/api';
-import { defer, lastValueFrom, of } from 'rxjs';
+import { defer, lastValueFrom, of, throwError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import type { NormalizedWebTransportOtelOptions } from './options.js';
 import { WebTransportTracingInterceptor } from './tracing.interceptor.js';
@@ -64,4 +64,34 @@ describe('tracing isolation and propagation', () => {
       contextSpy.mockRestore();
     }
   });
+});
+
+it('redacts handler exception messages and stacks by default', async () => {
+  const exceptions: unknown[] = [];
+  const interceptor = new WebTransportTracingInterceptor({
+    attributes: {},
+    meter: { createHistogram: () => ({ record() {} }), createCounter: () => ({ add() {} }) },
+    tracer: {
+      startSpan: () => ({
+        end() {},
+        recordException: (error: unknown) => exceptions.push(error),
+        setStatus() {},
+      }),
+    },
+  } as unknown as NormalizedWebTransportOtelOptions);
+  const host = {
+    getType: () => 'webtransport',
+    getClass: () => class Gateway {},
+    getHandler: () => function packet() {},
+    switchToWebTransport: () => ({
+      getSession: () => ({ id: '1', path: '/safe' }),
+      getStream: () => undefined,
+      getDatagram: () => new Uint8Array(),
+    }),
+  } as unknown as ExecutionContext;
+  const failure = new Error('Bearer secret-token');
+  await expect(
+    lastValueFrom(interceptor.intercept(host, { handle: () => throwError(() => failure) })),
+  ).rejects.toBe(failure);
+  expect(exceptions).toEqual([{ name: 'WebTransportHandlerError', message: 'Handler failed' }]);
 });

@@ -45,7 +45,7 @@ describe('WebTransportOtelModule', () => {
     await waitFor(() => gateway.payloads.length === 1);
 
     expect(gateway.payloads[0]).toEqual(new Uint8Array([1, 2, 3]));
-    expect(telemetry.observableInstruments).toHaveLength(10);
+    expect(telemetry.observableInstruments).toHaveLength(20);
     expect(telemetry.spans).toContain('webtransport.datagram.ObservedGateway.onDatagram');
     expect(telemetry.handlerDurations).toHaveLength(1);
     expect(telemetry.endedSpans).toBe(1);

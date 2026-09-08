@@ -61,7 +61,11 @@ export class WebTransportTracingInterceptor implements NestInterceptor {
       ).pipe(
         catchError((error: unknown) => {
           this.errors.add(1, metricAttributes);
-          span.recordException(toException(error));
+          span.recordException(
+            this.options.recordExceptionDetails === true
+              ? toException(error)
+              : { name: 'WebTransportHandlerError', message: 'Handler failed' },
+          );
           span.setStatus({ code: SpanStatusCode.ERROR });
           return throwError(() => error);
         }),
