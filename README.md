@@ -1,5 +1,7 @@
 # nest-webtransport
 
+한국어 번역은 [README.ko.md](README.ko.md)에서 확인할 수 있습니다.
+
 A driver-based WebTransport framework for NestJS. It keeps Nest discovery and execution separate
 from the HTTP/3/QUIC implementation, exposes Web Standard streams, and places explicit bounds on
 framework-owned work queues.
